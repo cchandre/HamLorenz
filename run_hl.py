@@ -7,5 +7,5 @@ phi = x + x**3 / 3
 
 x0 = np.asarray([0, 1.1, 2.3, 3.05])
 
-hl = HamLorenz(100, phi=phi)
-print(hl.y_dot(x0))
+hl = HamLorenz(phi=phi)
+print(hl.x_dot(x0))

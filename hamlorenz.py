@@ -70,8 +70,13 @@ class HamLorenz:
             
     def _mstar(self, l, k):
         return (k - l) % (self.K + 1)
- 
+    
+    def _gk(self, N):
+        return [[n for n in range(N) if n % (self.K + 1) == k] for k in range(self.K + 1)]
+    
     def casimir(self, x):
+        if np.array_equal(self.xi, self.xi[::-1]):
+            return np.asarray([np.sum(x[g]) for g in self._gk(len(x))])
         return np.sum(self.phi(x))
     
     def hamiltonian(self, x):
