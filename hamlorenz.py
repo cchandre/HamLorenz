@@ -61,12 +61,13 @@ class HamLorenz:
         nshift = [np.roll(x * self.f(x), k + 1) for k in range(self.K)]
         return self.f(x) * np.sum(self.xi * (np.asarray(pshift) - np.asarray(nshift)), axis=0)
     
-    def integrate(self, t_eval, x, events=None):
-        if self.method == 'ode45':
-            return solve_ivp(self.x_dot, (t_eval[0], t_eval[-1]), x, t_eval=t_eval, events=events)
-        elif self.method in METHODS:
+    def integrate(self, t_max, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
+        if method == 'ode45':
+            return solve_ivp(self.x_dot, (0, t_max), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
+        elif method in METHODS:
             if len(x) % (self.K + 1) != 0:
                 raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
+            return solve_ivp_symp(self._chi, self._chi_star, (0, t_max), x, t_eval=t_eval, method=method, step=step)
             
     def _mstar(self, l, k):
         return (k - l) % (self.K + 1)
@@ -76,11 +77,16 @@ class HamLorenz:
     
     def casimir(self, x):
         if np.array_equal(self.xi, self.xi[::-1]):
-            return np.asarray([np.sum(x[g]) for g in self._gk(len(x))])
+            return np.asarray([np.sum(self.phi(x[g])) for g in self._gk(len(x))])
         return np.sum(self.phi(x))
     
     def hamiltonian(self, x):
         return np.sum(x**2) / 2
+    
+    def poincare(self, t_max, arr_x, ps): 
+        for x in arr_x:
+            sol = self.integrate(t_max, x, method='BM4', step=1e-1, t_eval=None)
+            tab = ps(sol.y)
     
 
     
