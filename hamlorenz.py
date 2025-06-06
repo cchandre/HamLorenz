@@ -27,12 +27,13 @@
 
 import numpy as np
 import sympy as sp
+from scipy.optimize import root_scalar
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, HamSys, solve_ivp_symp
 
 class HamLorenz:
-    def __init__(self, K=1, xi=1, f=None, phi=None, method='ode45'): 
+    def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
         self.K = K
         self.method = method
         if isinstance(xi, (int, float)):
@@ -50,11 +51,28 @@ class HamLorenz:
             phi_expr = f, sp.integrate(1 / f_expr, x)
         else:
             f_expr, phi_expr = f, phi
+        self.invphi = invphi
+        if invphi is not None:
+            is_inv_fg = sp.simplify(phi(invphi(x)) - x) == 0
+            is_inv_gf = sp.simplify(invphi(phi(x)) - x) == 0
+            if not is_inv_fg and not is_inv_gf:
+                self.invphi = None
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
             raise ValueError('The functions f and phi are not compatible.')
         self.f = sp.lambdify(x, f_expr, modules='numpy')
         self.phi = sp.lambdify(x, phi_expr, modules='numpy')
+        self._n = np.arange(N)
+        self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
+        self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
+
+    def _invphi(self, x, x0=None):
+        if self.invphi is not None:
+            return self.invphi(x)
+        def g(x_):
+            return self.phi(x_) - x
+        result = root_scalar(g, x0=x0, method='brentq') 
+        return result.root
 
     def x_dot(self, x):
         pshift = [np.roll(x * self.f(x), -k - 1) for k in range(self.K)]
@@ -68,16 +86,22 @@ class HamLorenz:
             if len(x) % (self.K + 1) != 0:
                 raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
             return solve_ivp_symp(self._chi, self._chi_star, (0, t_max), x, t_eval=t_eval, method=method, step=step)
-            
-    def _mstar(self, l, k):
-        return (k - l) % (self.K + 1)
     
-    def _gk(self, N):
-        return [[n for n in range(N) if n % (self.K + 1) == k] for k in range(self.K + 1)]
+    def _gk(self, k):
+        return [n for n in self._n if n % (self.K + 1) == k]
+    
+    def _kappa(self, k, x):
+        mstar, indx = self._mstar[k], self._indk[k]
+        pshift = indx + mstar % (len(x))
+        nshift = indx + mstar - self.K - 1 % (len(x))
+        kappa = np.zeros_like(x)
+        kappa[indx] = self.xi[mstar[indx]] * x[pshift] * self.f(x[pshift])\
+              - self.xi[-mstar[indx]] * x[nshift] * self.f(x[nshift])
+        return kappa
     
     def casimir(self, x):
-        if np.array_equal(self.xi, self.xi[::-1]):
-            return np.asarray([np.sum(self.phi(x[g])) for g in self._gk(len(x))])
+        if np.array_equal(self.xi, self.xi[::-1]) and len(x) % (self.K + 1) == 0:
+            return np.asarray([np.sum(self.phi(x[self._indk[k]])) for k in range(self.K + 1)])
         return np.sum(self.phi(x))
     
     def hamiltonian(self, x):
@@ -88,8 +112,9 @@ class HamLorenz:
             sol = self.integrate(t_max, x, method='BM4', step=1e-1, t_eval=None)
             tab = ps(sol.y)
     
-
-    
-
+    def _mapk(self, k, x, h):
+        kappa = self._kappa(k, x) 
+        y = [self.invphi(ka)]
+        
                       
 
