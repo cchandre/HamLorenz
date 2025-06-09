@@ -27,14 +27,15 @@
 
 import numpy as np
 import sympy as sp
+from scipy.fft import fft, ifft, fftfreq
 from scipy.optimize import root_scalar
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
-from pyhamsys import METHODS, HamSys, solve_ivp_symp
+from pyhamsys import METHODS, solve_ivp_symp
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
-        self.K = K
+        self.K, self.N = K, N
         self.method = method
         if isinstance(xi, (int, float)):
             self.xi = np.full(xi, K)
@@ -69,26 +70,28 @@ class HamLorenz:
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
             return self.invphi(x)
-        def g(x_):
-            return self.phi(x_) - x
-        result = root_scalar(g, x0=x0, method='brentq') 
-        return result.root
+        x = np.asarray(x)
+        is_scalar = x.ndim == 0
+        def solve_scalar(xi):
+            g = lambda z: self.phi(z) - xi
+            return root_scalar(g, x0=x0, method='brentq').root
+        if is_scalar:
+            return solve_scalar(x.item())
+        roots = np.fromiter((solve_scalar(xi) for xi in x.flat), dtype=float)
+        return roots.reshape(x.shape)
 
-    def x_dot(self, x):
+    def x_dot(self, _, x):
         pshift = [np.roll(x * self.f(x), -k - 1) for k in range(self.K)]
         nshift = [np.roll(x * self.f(x), k + 1) for k in range(self.K)]
         return self.f(x) * np.sum(self.xi * (np.asarray(pshift) - np.asarray(nshift)), axis=0)
     
-    def integrate(self, t_max, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
+    def integrate(self, tf, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
         if method == 'ode45':
-            return solve_ivp(self.x_dot, (0, t_max), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
+            return solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
         elif method in METHODS:
             if len(x) % (self.K + 1) != 0:
                 raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
-            return solve_ivp_symp(self._chi, self._chi_star, (0, t_max), x, t_eval=t_eval, method=method, step=step)
-    
-    def _gk(self, k):
-        return [n for n in self._n if n % (self.K + 1) == k]
+            return solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
     
     def _kappa(self, k, x):
         mstar, indx = self._mstar[k], self._indk[k]
@@ -107,14 +110,49 @@ class HamLorenz:
     def hamiltonian(self, x):
         return np.sum(x**2) / 2
     
-    def poincare(self, t_max, arr_x, ps): 
+    def poincare(self, tf, arr_x, ps): 
         for x in arr_x:
-            sol = self.integrate(t_max, x, method='BM4', step=1e-1, t_eval=None)
+            sol = self.integrate(tf, x, method='BM4', step=1e-1, t_eval=None)
             tab = ps(sol.y)
     
     def _mapk(self, k, x, h):
         kappa = self._kappa(k, x) 
-        y = [self.invphi(ka)]
+        y = np.zeros_like(x)
+        y[self._indk] = self.invphi(kappa * h + self.phi(x[self._indk]))
+        return y
+    
+    def _chi(self, h, _, x):
+        for k in range(self.K + 1):
+            x = self._mapk(k, x, h)
+        return x
+    
+    def _chistar(self, h, _, x):
+        for k in reversed(range(self.K + 1)):
+            x = self._mapk(k, x, h)
+        return x
+    
+    def desymmetrize(self, sol):
+        xf = fft(sol.y, axis=0)
+        phase = np.angle(xf[1, :])
+        ki = 2 * np.pi * fftfreq(self.N)
+        return ifft(sol.y * np.exp(-1j * np.outer(ki, phase)), axis=0)
+
+    def plot_timeseries(self, sol, desymmetrize=False):
+        field = sol.y if not desymmetrize else self.desymmetrize(sol)
+        plt.figure(figsize=(10, 5))
+        im = plt.imshow(field, extent=[0, self.N, sol.t[-1], sol.t[0]], aspect='auto', cmap='RdBu_r')
+        plt.xlabel('n')
+        plt.ylabel('Time (t)')
+        title = 'Hovmöller Diagram'
+        if desymmetrize:
+            title += ' (desymmetrized)'
+        plt.title('Hovmöller Diagram')
+        plt.colorbar(im, label='Value')
+        plt.tight_layout()
+        plt.show()
+
+    
+        
         
                       
 
