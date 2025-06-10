@@ -29,15 +29,18 @@ import numpy as np
 import sympy as sp
 from scipy.fft import fft, ifft, fftfreq
 from scipy.optimize import root_scalar
+from scipy.stats import gaussian_kde, norm
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, solve_ivp_symp
+import warnings
 import time
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
         self.K, self.N = K, N
         self.method = method
+        self.xi = np.asarray(xi)
         if isinstance(xi, (int, float)):
             self.xi = np.full(xi, K)
         elif len(self.xi) != K:
@@ -55,18 +58,12 @@ class HamLorenz:
             f_expr, phi_expr = f, phi
         dphi_expr = sp.diff(phi_expr, x)
         invphi_expr = invphi
-        #if invphi is not None:
-        #    is_inv_fg = sp.simplify(phi(invphi) - x) == 0
-        #    is_inv_gf = sp.simplify(invphi(phi) - x) == 0
-        #   if not is_inv_fg and not is_inv_gf:
-        #        self.invphi = None
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
             raise ValueError('The functions f and phi are not compatible.')
         self.f = sp.lambdify(x, f_expr, modules='numpy')
         self.phi = sp.lambdify(x, phi_expr, modules='numpy')
         self.invphi = None if invphi == None else sp.lambdify(y, invphi_expr, modules='numpy')
-        self.phi = sp.lambdify(x, phi_expr, modules='numpy')
         self.dphi = sp.lambdify(x, dphi_expr, modules='numpy')
         self._n = np.arange(N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
@@ -94,7 +91,7 @@ class HamLorenz:
     def x_dot(self, _, x):
         pshift = np.asarray([np.roll(x * self.f(x), -k - 1) for k in range(self.K)])
         nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
-        return self.f(x) * np.sum(self.xi * (pshift - nshift), axis=0)
+        return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
         start = time.time()
@@ -106,13 +103,19 @@ class HamLorenz:
             sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
         else:
             raise ValueError('The chosen method is not valid.')
-        energy_error = np.abs(self.hamiltonian(sol.y[:, -1]) - self.hamiltonian(sol.y[:, 0]))
-        print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds with error in energy = {energy_error:.2e} \033[00m')
-        casimir_error = np.abs(self.casimir(sol.y[:, -1])  - self.casimir(sol.y[:, 0]))
-        casimirs = self.casimir(sol.y[:, 0])
-        for _, (cas, err) in enumerate(zip(casimirs, casimir_error)):
-            print(f'\033[90m        Errors in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
+        
+        print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
+        self._compute_error(sol)
         return sol
+    
+    def _compute_error(self, sol):
+        energy_init = self.hamiltonian(sol.y[:, 0])
+        energy_error = np.amax(np.abs(self.hamiltonian(sol.y) - energy_init), axis=0)
+        print(f'\033[90m        Error in energy = {energy_error:.2e} (initial value = {energy_init:.2e}) \033[00m')
+        casimirs_init = self.casimir(sol.y[:, 0])
+        casimirs_error = np.amax(np.abs(self.casimir(sol.y)  - casimirs_init[:, np.newaxis]), axis=1)
+        for _, (cas, err) in enumerate(zip(casimirs_init, casimirs_error)):
+            print(f'\033[90m        Error in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
     
     def _kappa(self, k, x):
         mstar, indk = self._mstar[k], self._indk[k]==0
@@ -125,16 +128,11 @@ class HamLorenz:
     
     def casimir(self, x):
         if np.array_equal(self.xi, self.xi[::-1]) and len(x) % (self.K + 1) == 0:
-            return np.asarray([np.sum(self.phi(x[self._indk[k]])) for k in range(self.K + 1)])
-        return np.asarray([np.sum(self.phi(x))])
+            return np.asarray([np.sum(self.phi(x[self._indk[k]]), axis=0) for k in range(self.K + 1)])
+        return np.asarray([np.sum(self.phi(x), axis=0)])
     
     def hamiltonian(self, x):
-        return np.sum(x**2) / 2
-    
-    def poincare(self, tf, arr_x, ps): 
-        for x in arr_x:
-            sol = self.integrate(tf, x, method='BM4', step=1e-1, t_eval=None)
-            tab = ps(sol.y)
+        return np.sum(x**2, axis=0) / 2
     
     def _mapk(self, k, x, h):
         indk = self._indk[k]==0
@@ -154,7 +152,7 @@ class HamLorenz:
     
     def desymmetrize(self, sol):
         xf = fft(sol.y, axis=0)
-        phase = np.angle(xf[1, :])
+        phase = np.unwrap(np.angle(xf[1, :]))
         ki = 2 * np.pi * fftfreq(self.N)
         return ifft(xf * np.exp(-1j * np.outer(ki, phase)), axis=0).real
 
@@ -162,13 +160,32 @@ class HamLorenz:
         field = sol.y if not desymmetrize else self.desymmetrize(sol)
         plt.figure(figsize=(10, 5))
         im = plt.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], aspect='auto', cmap='RdBu_r', interpolation='none')
-        plt.xlabel('n')
-        plt.ylabel('Time (t)')
+        plt.xlabel(r'$n$')
+        plt.ylabel(r'Time ($t$)')
         title = 'Hovmöller Diagram'
         if desymmetrize:
             title += ' (desymmetrized)'
-        plt.title('Hovmöller Diagram')
-        plt.colorbar(im, label='X(t)')
+        plt.title(title)
+        plt.colorbar(im, label=r'$X_n(t)$')
+        plt.tight_layout()
+        plt.show()
+
+    def plot_pdf(self, sol):
+        X_t = sol.y.flatten()
+        kde = gaussian_kde(X_t)
+        x_vals = np.linspace(min(X_t), max(X_t), 200)
+        pdf_kde = kde(x_vals)
+        mu, sigma = norm.fit(X_t)
+        pdf_gauss = norm.pdf(x_vals, mu, sigma)
+        plt.figure(figsize=(8, 4))
+        plt.plot(x_vals, pdf_kde, label='KDE estimate', linewidth=2)
+        plt.plot(x_vals, pdf_gauss, 'r--', label=fr'Gaussian fit: $\mu={mu:.2f}$, $\sigma={sigma:.2f}$')
+        plt.yscale('log')
+        plt.xlabel(r'$X$', fontsize=12)
+        plt.ylabel(r'PDF', fontsize=12)
+        plt.title(r'PDF of $X$ with Gaussian Fit', fontsize=14)
+        plt.grid(True)
+        plt.legend()
         plt.tight_layout()
         plt.show()
 

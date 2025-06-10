@@ -11,7 +11,7 @@ b = 2**(1/3)
 invphi = -b / a + a / b
 
 N = 100
-tf = 1000
+tf = 10000
 
 hl = HamLorenz(N, phi=phi, invphi=invphi)
 
@@ -21,6 +21,8 @@ x0 = np.random.rand(N)
 
 x0 *= np.sqrt(2 * E / np.sum(x0**2))
 
-sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='BM4', step=1e-2)
+sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='ode45', step=1e-1, tol=1e-11)
 
-hl.plot_timeseries(sol, desymmetrize=True)
+hl.plot_timeseries(sol, desymmetrize=False)
+
+hl.plot_pdf(sol)
