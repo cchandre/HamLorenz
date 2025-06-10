@@ -32,6 +32,7 @@ from scipy.optimize import root_scalar
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, solve_ivp_symp
+import time
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
@@ -43,7 +44,7 @@ class HamLorenz:
             raise ValueError('The length of xi should be K.')
         if f is None and phi is None:
             raise ValueError('Either f or phi must be provided.')
-        x = sp.symbols('x')
+        x, y = sp.symbols('x y')
         if f is None:
             phi_expr = phi
             f_expr = 1 / sp.diff(phi_expr, x)
@@ -52,17 +53,21 @@ class HamLorenz:
             phi_expr = f, sp.integrate(1 / f_expr, x)
         else:
             f_expr, phi_expr = f, phi
-        self.invphi = invphi
-        if invphi is not None:
-            is_inv_fg = sp.simplify(phi(invphi(x)) - x) == 0
-            is_inv_gf = sp.simplify(invphi(phi(x)) - x) == 0
-            if not is_inv_fg and not is_inv_gf:
-                self.invphi = None
+        dphi_expr = sp.diff(phi_expr, x)
+        invphi_expr = invphi
+        #if invphi is not None:
+        #    is_inv_fg = sp.simplify(phi(invphi) - x) == 0
+        #    is_inv_gf = sp.simplify(invphi(phi) - x) == 0
+        #   if not is_inv_fg and not is_inv_gf:
+        #        self.invphi = None
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
             raise ValueError('The functions f and phi are not compatible.')
         self.f = sp.lambdify(x, f_expr, modules='numpy')
         self.phi = sp.lambdify(x, phi_expr, modules='numpy')
+        self.invphi = None if invphi == None else sp.lambdify(y, invphi_expr, modules='numpy')
+        self.phi = sp.lambdify(x, phi_expr, modules='numpy')
+        self.dphi = sp.lambdify(x, dphi_expr, modules='numpy')
         self._n = np.arange(N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
@@ -72,40 +77,56 @@ class HamLorenz:
             return self.invphi(x)
         x = np.asarray(x)
         is_scalar = x.ndim == 0
-        def solve_scalar(xi):
+        if np.isscalar(x0):
+            x0s = np.full_like(x, x0, dtype=float)
+        else:
+            x0s = np.asarray(x0)
+            if x0s.shape != x.shape:
+                raise ValueError("x0 must be scalar or have the same shape as x")
+        def solve_scalar(xi, x0i):
             g = lambda z: self.phi(z) - xi
-            return root_scalar(g, x0=x0, method='brentq').root
+            return root_scalar(g, x0=x0i, fprime=lambda z: self.dphi(z), method='newton').root
         if is_scalar:
-            return solve_scalar(x.item())
-        roots = np.fromiter((solve_scalar(xi) for xi in x.flat), dtype=float)
+            return solve_scalar(x.item(), x0s.item())
+        roots = np.fromiter((solve_scalar(xi, x0i) for xi, x0i in zip(x.flat, x0s.flat)), dtype=float)
         return roots.reshape(x.shape)
 
     def x_dot(self, _, x):
-        pshift = [np.roll(x * self.f(x), -k - 1) for k in range(self.K)]
-        nshift = [np.roll(x * self.f(x), k + 1) for k in range(self.K)]
-        return self.f(x) * np.sum(self.xi * (np.asarray(pshift) - np.asarray(nshift)), axis=0)
+        pshift = np.asarray([np.roll(x * self.f(x), -k - 1) for k in range(self.K)])
+        nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
+        return self.f(x) * np.sum(self.xi * (pshift - nshift), axis=0)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
+        start = time.time()
         if method == 'ode45':
-            return solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
+            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
         elif method in METHODS:
             if len(x) % (self.K + 1) != 0:
                 raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
-            return solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
+            sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
+        else:
+            raise ValueError('The chosen method is not valid.')
+        energy_error = np.abs(self.hamiltonian(sol.y[:, -1]) - self.hamiltonian(sol.y[:, 0]))
+        print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds with error in energy = {energy_error:.2e} \033[00m')
+        casimir_error = np.abs(self.casimir(sol.y[:, -1])  - self.casimir(sol.y[:, 0]))
+        casimirs = self.casimir(sol.y[:, 0])
+        for _, (cas, err) in enumerate(zip(casimirs, casimir_error)):
+            print(f'\033[90m        Errors in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
+        return sol
     
     def _kappa(self, k, x):
-        mstar, indx = self._mstar[k], self._indk[k]
-        pshift = indx + mstar % (len(x))
-        nshift = indx + mstar - self.K - 1 % (len(x))
+        mstar, indk = self._mstar[k], self._indk[k]==0
+        pshift = (self._n + mstar) % (len(x))
+        nshift = (self._n + mstar - self.K - 1) % (len(x))
         kappa = np.zeros_like(x)
-        kappa[indx] = self.xi[mstar[indx]] * x[pshift] * self.f(x[pshift])\
-              - self.xi[-mstar[indx]] * x[nshift] * self.f(x[nshift])
+        kappa[indk] = self.xi[mstar[indk] - 1] * x[pshift[indk]] * self.f(x[pshift[indk]])\
+              - self.xi[-mstar[indk] + 1] * x[nshift[indk]] * self.f(x[nshift[indk]])
         return kappa
     
     def casimir(self, x):
         if np.array_equal(self.xi, self.xi[::-1]) and len(x) % (self.K + 1) == 0:
             return np.asarray([np.sum(self.phi(x[self._indk[k]])) for k in range(self.K + 1)])
-        return np.sum(self.phi(x))
+        return np.asarray([np.sum(self.phi(x))])
     
     def hamiltonian(self, x):
         return np.sum(x**2) / 2
@@ -116,17 +137,17 @@ class HamLorenz:
             tab = ps(sol.y)
     
     def _mapk(self, k, x, h):
-        kappa = self._kappa(k, x) 
-        y = np.zeros_like(x)
-        y[self._indk] = self.invphi(kappa * h + self.phi(x[self._indk]))
-        return y
+        indk = self._indk[k]==0
+        kappa = self._kappa(k, x)
+        x[indk] = self._invphi(kappa[indk] * h + self.phi(x[indk]), x0=self.phi(x[indk]))
+        return x
     
     def _chi(self, h, _, x):
         for k in range(self.K + 1):
             x = self._mapk(k, x, h)
         return x
     
-    def _chistar(self, h, _, x):
+    def _chi_star(self, h, _, x):
         for k in reversed(range(self.K + 1)):
             x = self._mapk(k, x, h)
         return x
@@ -135,19 +156,19 @@ class HamLorenz:
         xf = fft(sol.y, axis=0)
         phase = np.angle(xf[1, :])
         ki = 2 * np.pi * fftfreq(self.N)
-        return ifft(sol.y * np.exp(-1j * np.outer(ki, phase)), axis=0)
+        return ifft(xf * np.exp(-1j * np.outer(ki, phase)), axis=0).real
 
     def plot_timeseries(self, sol, desymmetrize=False):
         field = sol.y if not desymmetrize else self.desymmetrize(sol)
         plt.figure(figsize=(10, 5))
-        im = plt.imshow(field, extent=[0, self.N, sol.t[-1], sol.t[0]], aspect='auto', cmap='RdBu_r')
+        im = plt.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], aspect='auto', cmap='RdBu_r', interpolation='none')
         plt.xlabel('n')
         plt.ylabel('Time (t)')
         title = 'Hovmöller Diagram'
         if desymmetrize:
             title += ' (desymmetrized)'
         plt.title('Hovmöller Diagram')
-        plt.colorbar(im, label='Value')
+        plt.colorbar(im, label='X(t)')
         plt.tight_layout()
         plt.show()
 
