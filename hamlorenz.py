@@ -97,6 +97,12 @@ class HamLorenz:
         nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
         return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
+    def y_dot(self, _, y):
+        x = self._invphi(y, 0)
+        pshift = np.asarray([np.roll(x * self.f(x), -k - 1) for k in range(self.K)])
+        nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
+        return np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+    
     def generate_initial_conditions(self, N, energy=1, casimirs=0):
         X = 2 * np.random.randn(N) - 1
         X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
@@ -171,7 +177,7 @@ class HamLorenz:
     def desymmetrize(self, vec):
         xf = fft(vec, axis=0)
         phase = np.unwrap(np.angle(xf[1, :]))
-        ki = 2 * np.pi * fftfreq(self.N)
+        ki = fftfreq(self.N, d=1 / self.N)
         return ifft(xf * np.exp(-1j * np.outer(ki, phase)), axis=0).real
 
     def plot_timeseries(self, sol):
@@ -191,10 +197,10 @@ class HamLorenz:
         im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
         ax1.set_xlabel(r'$n$')
         ax1.set_ylabel(r'Time ($t$)')
-        ax1.set_title('Hovmöller Diagram')
+        ax1.set_title('Hovmöller diagram')
         im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
         ax2.set_xlabel(r'$n$')
-        ax2.set_title('Hovmöller Diagram (desymmetrized)')
+        ax2.set_title('Hovmöller diagram (desymmetrized)')
         ax1.set_aspect('auto')
         ax2.set_aspect('auto')
         cbar = fig.colorbar(im1, cax=cax, orientation='vertical', label='Color scale')
