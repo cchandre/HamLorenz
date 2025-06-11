@@ -28,8 +28,8 @@
 import numpy as np
 import sympy as sp
 from scipy.fft import fft, ifft, fftfreq
-from scipy.optimize import root_scalar
-from scipy.stats import gaussian_kde, norm
+from scipy.optimize import root_scalar, minimize
+from scipy.stats import gaussian_kde, norm, zscore
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, solve_ivp_symp
@@ -68,6 +68,7 @@ class HamLorenz:
         self._n = np.arange(N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
+        self.ncasimirs = self.K + 1 if np.array_equal(self.xi, self.xi[::-1]) and self.N % (self.K + 1) == 0 else 1
 
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
@@ -93,17 +94,29 @@ class HamLorenz:
         nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
         return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
+    def generate_initial_conditions(self, N, energy, casimirs):
+        X = 2 * np.random.randn(N) - 1
+        X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
+        casimirs = np.atleast_1d(casimirs)
+        cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
+        for k in range(self.ncasimirs):
+            cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
+        result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP')
+        if not result.success:
+            raise RuntimeError("Optimization failed: " + result.message)
+        return result.x
+    
     def integrate(self, tf, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
         start = time.time()
         if method == 'ode45':
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
         elif method in METHODS:
-            if len(x) % (self.K + 1) != 0:
+            if len(x) % (self.K + 1) == 0:
+                sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
+            else:
                 raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
-            sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
         else:
             raise ValueError('The chosen method is not valid.')
-        
         print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
         self._compute_error(sol)
         return sol
@@ -112,8 +125,8 @@ class HamLorenz:
         energy_init = self.hamiltonian(sol.y[:, 0])
         energy_error = np.amax(np.abs(self.hamiltonian(sol.y) - energy_init), axis=0)
         print(f'\033[90m        Error in energy = {energy_error:.2e} (initial value = {energy_init:.2e}) \033[00m')
-        casimirs_init = self.casimir(sol.y[:, 0])
-        casimirs_error = np.amax(np.abs(self.casimir(sol.y)  - casimirs_init[:, np.newaxis]), axis=1)
+        casimirs_init = [self.casimir(sol.y[:, 0], k=k) for k in range(self.ncasimirs)]
+        casimirs_error = [np.amax(np.abs(self.casimir(sol.y, k=k)  - casimirs_init[k]), axis=0) for k in range(self.ncasimirs)]
         for _, (cas, err) in enumerate(zip(casimirs_init, casimirs_error)):
             print(f'\033[90m        Error in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
     
@@ -126,10 +139,10 @@ class HamLorenz:
               - self.xi[-mstar[indk] + 1] * x[nshift[indk]] * self.f(x[nshift[indk]])
         return kappa
     
-    def casimir(self, x):
-        if np.array_equal(self.xi, self.xi[::-1]) and len(x) % (self.K + 1) == 0:
-            return np.asarray([np.sum(self.phi(x[self._indk[k]]), axis=0) for k in range(self.K + 1)])
-        return np.asarray([np.sum(self.phi(x), axis=0)])
+    def casimir(self, x, k=0):
+        if self.ncasimirs >= 2:
+            return np.sum(self.phi(x[self._indk[k]]), axis=0)
+        return np.sum(self.phi(x), axis=0)
     
     def hamiltonian(self, x):
         return np.sum(x**2, axis=0) / 2
@@ -171,14 +184,16 @@ class HamLorenz:
         plt.show()
 
     def plot_pdf(self, sol):
-        X_t = sol.y.flatten()
-        kde = gaussian_kde(X_t)
-        x_vals = np.linspace(min(X_t), max(X_t), 200)
-        pdf_kde = kde(x_vals)
+        X_t = zscore(sol.y.flatten(), ddof=1)
+        Y_t = zscore(self.phi(sol.y.flatten()), ddof=1)
+        kde_x, kde_y = gaussian_kde(X_t), gaussian_kde(Y_t)
+        x_vals, y_vals = np.linspace(min(X_t), max(X_t), 200), np.linspace(min(Y_t), max(Y_t), 200)
+        pdf_kde_x, pdf_kde_y = kde_x(x_vals), kde_y(y_vals)
         mu, sigma = norm.fit(X_t)
         pdf_gauss = norm.pdf(x_vals, mu, sigma)
         plt.figure(figsize=(8, 4))
-        plt.plot(x_vals, pdf_kde, label='KDE estimate', linewidth=2)
+        plt.plot(x_vals, pdf_kde_x, label='KDE estimate of X', linewidth=2)
+        plt.plot(y_vals, pdf_kde_y, label='KDE estimate of Y', linewidth=2)
         plt.plot(x_vals, pdf_gauss, 'r--', label=fr'Gaussian fit: $\mu={mu:.2f}$, $\sigma={sigma:.2f}$')
         plt.yscale('log')
         plt.xlabel(r'$X$', fontsize=12)

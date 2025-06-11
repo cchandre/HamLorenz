@@ -17,12 +17,10 @@ hl = HamLorenz(N, phi=phi, invphi=invphi)
 
 E = 25
 
-x0 = np.random.rand(N)
+x0 = hl.generate_initial_conditions(N, energy=E, casimirs=[24.8, 22.7])
 
-x0 *= np.sqrt(2 * E / np.sum(x0**2))
+sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='BM4', step=1e-1)
 
-sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='ode45', step=1e-1, tol=1e-11)
-
-hl.plot_timeseries(sol, desymmetrize=False)
+hl.plot_timeseries(sol, desymmetrize=True)
 
 hl.plot_pdf(sol)
