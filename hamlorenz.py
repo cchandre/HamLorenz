@@ -31,10 +31,13 @@ from scipy.fft import fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, solve_ivp_symp
+from scipy.io import savemat
 import warnings
 import time
+from datetime import date
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
@@ -94,10 +97,12 @@ class HamLorenz:
         nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
         return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
-    def generate_initial_conditions(self, N, energy, casimirs):
+    def generate_initial_conditions(self, N, energy=1, casimirs=0):
         X = 2 * np.random.randn(N) - 1
         X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
         casimirs = np.atleast_1d(casimirs)
+        if len(casimirs) != self.ncasimirs:
+            casimirs = casimirs[0] * np.ones(self.ncasimirs)
         cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
         for k in range(self.ncasimirs):
             cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
@@ -163,24 +168,37 @@ class HamLorenz:
             x = self._mapk(k, x, h)
         return x
     
-    def desymmetrize(self, sol):
-        xf = fft(sol.y, axis=0)
+    def desymmetrize(self, vec):
+        xf = fft(vec, axis=0)
         phase = np.unwrap(np.angle(xf[1, :]))
         ki = 2 * np.pi * fftfreq(self.N)
         return ifft(xf * np.exp(-1j * np.outer(ki, phase)), axis=0).real
 
-    def plot_timeseries(self, sol, desymmetrize=False):
-        field = sol.y if not desymmetrize else self.desymmetrize(sol)
-        plt.figure(figsize=(10, 5))
-        im = plt.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], aspect='auto', cmap='RdBu_r', interpolation='none')
-        plt.xlabel(r'$n$')
-        plt.ylabel(r'Time ($t$)')
-        title = 'Hovmöller Diagram'
-        if desymmetrize:
-            title += ' (desymmetrized)'
-        plt.title(title)
-        plt.colorbar(im, label=r'$X_n(t)$')
-        plt.tight_layout()
+    def plot_timeseries(self, sol):
+        panel_width, panel_height = 3, 5
+        colorbar_width = 0.3
+        field, field_sym = sol.y, self.desymmetrize(sol.y)
+        vmin = min(field.min(), field_sym.min())
+        vmax = max(field.max(), field_sym.max())
+        cmap = 'RdBu_r'
+        fig_width = 2 * panel_width + colorbar_width + 1.0
+        fig_height = panel_height + 1.0
+        fig = plt.figure(figsize=(fig_width, fig_height))
+        gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1, 0.05], wspace=0.3)
+        ax1 = fig.add_subplot(gs[0])
+        ax2 = fig.add_subplot(gs[1])
+        cax = fig.add_subplot(gs[2])
+        im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
+        ax1.set_xlabel(r'$n$')
+        ax1.set_ylabel(r'Time ($t$)')
+        ax1.set_title('Hovmöller Diagram')
+        im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
+        ax2.set_xlabel(r'$n$')
+        ax2.set_title('Hovmöller Diagram (desymmetrized)')
+        ax1.set_aspect('auto')
+        ax2.set_aspect('auto')
+        cbar = fig.colorbar(im1, cax=cax, orientation='vertical', label='Color scale')
+        cbar.set_label('$X_n(t)$')
         plt.show()
 
     def plot_pdf(self, sol):
@@ -196,16 +214,17 @@ class HamLorenz:
         plt.plot(y_vals, pdf_kde_y, label='KDE estimate of Y', linewidth=2)
         plt.plot(x_vals, pdf_gauss, 'r--', label=fr'Gaussian fit: $\mu={mu:.2f}$, $\sigma={sigma:.2f}$')
         plt.yscale('log')
+        plt.ylim([1e-4, 1])
         plt.xlabel(r'$X$', fontsize=12)
         plt.ylabel(r'PDF', fontsize=12)
-        plt.title(r'PDF of $X$ with Gaussian Fit', fontsize=14)
+        plt.title(r'PDF of $X$ and $Y$ with Gaussian fit', fontsize=14)
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
         plt.show()
 
-    
-        
-        
-                      
-
+    def save2matlab(self, sol, filename='data'):
+        mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
+        mdic.update({'t': sol.t, 'X': sol.y})
+        savemat(filename + '.mat', mdic)
+        print(f'\033[90m        Results saved in {filename}.mat \033[00m')
