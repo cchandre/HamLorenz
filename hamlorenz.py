@@ -177,34 +177,37 @@ class HamLorenz:
     def desymmetrize(self, vec):
         xf = fft(vec, axis=0)
         phase = np.unwrap(np.angle(xf[1, :]))
-        ki = fftfreq(self.N, d=1 / self.N)
+        ki = fftfreq(self.N, d=1/self.N)
         return ifft(xf * np.exp(-1j * np.outer(ki, phase)), axis=0).real
 
     def plot_timeseries(self, sol):
         panel_width, panel_height = 3, 5
-        colorbar_width = 0.3
+        colorbar_width = 0.5
         field, field_sym = sol.y, self.desymmetrize(sol.y)
-        vmin = min(field.min(), field_sym.min())
-        vmax = max(field.max(), field_sym.max())
         cmap = 'RdBu_r'
         fig_width = 2 * panel_width + colorbar_width + 1.0
         fig_height = panel_height + 1.0
         fig = plt.figure(figsize=(fig_width, fig_height))
-        gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1, 0.05], wspace=0.3)
-        ax1 = fig.add_subplot(gs[0])
-        ax2 = fig.add_subplot(gs[1])
-        cax = fig.add_subplot(gs[2])
-        im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
+        gs = gridspec.GridSpec(1, 4, width_ratios=[0.05, 1, 1, 0.05], wspace=0.7)
+        cax1 = fig.add_subplot(gs[0])
+        ax1 = fig.add_subplot(gs[1])
+        ax2 = fig.add_subplot(gs[2])
+        cax2 = fig.add_subplot(gs[3])
+        im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap, origin='lower')
         ax1.set_xlabel(r'$n$')
         ax1.set_ylabel(r'Time ($t$)')
         ax1.set_title('Hovmöller diagram')
-        im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], vmin=vmin, vmax=vmax, cmap=cmap, origin='lower')
+        im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap, origin='lower')
         ax2.set_xlabel(r'$n$')
         ax2.set_title('Hovmöller diagram (desymmetrized)')
         ax1.set_aspect('auto')
         ax2.set_aspect('auto')
-        cbar = fig.colorbar(im1, cax=cax, orientation='vertical', label='Color scale')
-        cbar.set_label('$X_n(t)$')
+        cbar1 = fig.colorbar(im1, cax=cax1, orientation='vertical')
+        cbar1.set_label('$X_n(t)$')
+        cbar1.ax.yaxis.set_label_position('left')
+        cbar1.ax.yaxis.tick_left()
+        cbar2 = fig.colorbar(im2, cax=cax2, orientation='vertical', label='Color scale')
+        cbar2.set_label('$X_n(t)$')
         plt.show()
 
     def plot_pdf(self, sol):
