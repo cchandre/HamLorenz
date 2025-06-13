@@ -27,13 +27,13 @@
 
 import numpy as np
 import sympy as sp
-from scipy.fft import fft, ifft, fftfreq
+from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy.integrate import solve_ivp
-from pyhamsys import METHODS, solve_ivp_symp
+from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
 from scipy.io import savemat
 import warnings
 import time
@@ -72,6 +72,8 @@ class HamLorenz:
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
         self.ncasimirs = self.K + 1 if np.array_equal(self.xi, self.xi[::-1]) and self.N % (self.K + 1) == 0 else 1
+        kfreq = 2 * np.pi * rfftfreq(self.N)
+        self.R = 2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
 
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
@@ -93,14 +95,14 @@ class HamLorenz:
         return roots.reshape(x.shape)
 
     def x_dot(self, _, x):
-        pshift = np.asarray([np.roll(x * self.f(x), -k - 1) for k in range(self.K)])
-        nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
+        pshift = np.asarray([np.roll(x * self.f(x), -k) for k in range(1, self.K + 1)])
+        nshift = np.asarray([np.roll(x * self.f(x), k) for k in range(1, self.K + 1)])
         return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
     def y_dot(self, _, y):
-        x = self._invphi(y, 0)
-        pshift = np.asarray([np.roll(x * self.f(x), -k - 1) for k in range(self.K)])
-        nshift = np.asarray([np.roll(x * self.f(x), k + 1) for k in range(self.K)])
+        x = self._invphi(y)
+        pshift = np.asarray([np.roll(x * self.f(x), -k) for k in range(1, self.K + 1)])
+        nshift = np.asarray([np.roll(x * self.f(x), k) for k in range(1, self.K + 1)])
         return np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
     def generate_initial_conditions(self, N, energy=1, casimirs=0):
@@ -125,7 +127,10 @@ class HamLorenz:
             if len(x) % (self.K + 1) == 0:
                 sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
             else:
-                raise ValueError('Symplectic integration can only be done if N is a multiple of K+1.')
+                hs = HamSys(btype='other')
+                hs.coupling, hs.y_dot = self.coupling, self.y_dot
+                sol = solve_ivp_sympext(hs, (0, tf), self.phi(x), t_eval=t_eval, method=method, step=step, omega=1)
+                sol.y = self._invphi(sol.y)
         else:
             raise ValueError('The chosen method is not valid.')
         print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
@@ -174,6 +179,12 @@ class HamLorenz:
             x = self._mapk(k, x, h)
         return x
     
+    def coupling(self, h, y, omega=10):
+        y1, y2 = np.split(y, 2)
+        sy = (y1 + y2) / 2
+        dy = irfft(np.exp(-2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
+        return np.concatenate((sy + dy, sy - dy), axis=None)
+    
     def desymmetrize(self, vec):
         xf = fft(vec, axis=0)
         phase = np.unwrap(np.angle(xf[1, :]))
@@ -193,11 +204,11 @@ class HamLorenz:
         ax1 = fig.add_subplot(gs[1])
         ax2 = fig.add_subplot(gs[2])
         cax2 = fig.add_subplot(gs[3])
-        im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap, origin='lower')
+        im1 = ax1.imshow(field.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap)
         ax1.set_xlabel(r'$n$')
         ax1.set_ylabel(r'Time ($t$)')
         ax1.set_title('Hovmöller diagram')
-        im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap, origin='lower')
+        im2 = ax2.imshow(field_sym.T, extent=[0, self.N, sol.t[-1], sol.t[0]], cmap=cmap)
         ax2.set_xlabel(r'$n$')
         ax2.set_title('Hovmöller diagram (desymmetrized)')
         ax1.set_aspect('auto')
