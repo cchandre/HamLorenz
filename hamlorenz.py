@@ -30,10 +30,12 @@ import sympy as sp
 from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
+from scipy.sparse.linalg import eigs
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
+from scipy.integrate._ivp import ivp
 from scipy.io import savemat
 import warnings
 import time
@@ -62,7 +64,7 @@ class HamLorenz:
             phi_expr = sp.integrate(1 / f_expr, x)
         else:
             f_expr, phi_expr = f, phi
-        dphi_expr = sp.diff(phi_expr, x)
+        df_expr, dphi_expr = sp.diff(f_expr, x), sp.diff(phi_expr, x)
         invphi_expr = invphi
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
@@ -71,6 +73,7 @@ class HamLorenz:
         self.phi = sp.lambdify(x, phi_expr, modules='numpy')
         self.invphi = None if invphi == None else sp.lambdify(y, invphi_expr, modules='numpy')
         self.dphi = sp.lambdify(x, dphi_expr, modules='numpy')
+        self.df = sp.lambdify(x, df_expr, modules='numpy')
         self._n = np.arange(N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
@@ -82,6 +85,8 @@ class HamLorenz:
         J_null = J.nullspace()
         self.casimir_coeffs = [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in J_null]
         self.ncasimirs = len(self.casimir_coeffs)   
+        self.delta_p = np.asarray([np.roll(np.eye(self.N, dtype=int), shift=-k, axis=0) for k in range(self.K + 1)])
+        self.delta_n = np.asarray([np.roll(np.eye(self.N, dtype=int), shift=k, axis=0) for k in range(self.K + 1)])
 
     def cubic_model(self, b=1):
         x, y = sp.symbols('x y')
@@ -109,17 +114,33 @@ class HamLorenz:
             return solve_scalar(x.item(), x0s.item())
         roots = np.fromiter((solve_scalar(xi, x0i) for xi, x0i in zip(x.flat, x0s.flat)), dtype=float)
         return roots.reshape(x.shape)
+    
+    def _shifts(self, vec):
+        pshift = np.asarray([np.roll(vec, -k) for k in range(1, self.K + 1)])
+        nshift = np.asarray([np.roll(vec, k) for k in range(1, self.K + 1)])
+        return pshift, nshift
 
     def x_dot(self, _, x):
-        pshift = np.asarray([np.roll(x * self.f(x), -k) for k in range(1, self.K + 1)])
-        nshift = np.asarray([np.roll(x * self.f(x), k) for k in range(1, self.K + 1)])
+        pshift, nshift = self._shifts(x * self.f(x))
         return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
     def y_dot(self, _, y):
         x = self._invphi(y)
-        pshift = np.asarray([np.roll(x * self.f(x), -k) for k in range(1, self.K + 1)])
-        nshift = np.asarray([np.roll(x * self.f(x), k) for k in range(1, self.K + 1)])
+        pshift, nshift = self._shifts(x * self.f(x))
         return np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+    
+    def z_dot(self, _, z):
+        x, Q = z[:self.N], z[self.N:].reshape((self.N, self.N))
+        dxdt, dQdt = self.x_dot(_, x), self.jacobian(x) @ Q
+        return np.concatenate((dxdt, dQdt), axis=None)
+    
+    def jacobian(self, x):
+        pshift, nshift = self._shifts(x * self.f(x))
+        diag = np.diag(self.df(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0))
+        pshift, nshift = self._shifts(self.f(x) + x * self.df(x))
+        off_diag = np.sum(self.f(x)[np.newaxis, :, np.newaxis] * self.xi[:, np.newaxis, np.newaxis]\
+              * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
+        return diag + off_diag
     
     def generate_initial_conditions(self, N, energy=1, casimirs=0):
         X = 2 * np.random.randn(N) - 1
@@ -135,10 +156,10 @@ class HamLorenz:
             raise RuntimeError("Optimization failed: " + result.message)
         return result.x
     
-    def integrate(self, tf, x, t_eval=None, events=None, method='ode45', step=1e-2, tol=1e-8):
+    def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
         start = time.time()
-        if method == 'ode45':
-            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step)
+        if method in ivp.METHODS:
+            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
         elif method in METHODS:
             if len(x) % (self.K + 1) == 0:
                 sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
@@ -150,15 +171,15 @@ class HamLorenz:
         else:
             raise ValueError('The chosen method is not valid.')
         print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
-        self._compute_error(sol)
+        self._compute_error(sol.y, sol.y[:, 0])
         return sol
     
-    def _compute_error(self, sol):
-        energy_init = self.hamiltonian(sol.y[:, 0])
-        energy_error = np.amax(np.abs(self.hamiltonian(sol.y) - energy_init), axis=0)
+    def _compute_error(self, x, x0):
+        energy_init = self.hamiltonian(x0)
+        energy_error = np.amax(np.abs(self.hamiltonian(x[:self.N, :]) - energy_init), axis=0)
         print(f'\033[90m        Error in energy = {energy_error:.2e} (initial value = {energy_init:.2e}) \033[00m')
-        casimirs_init = [self.casimir(sol.y[:, 0], k=k) for k in range(self.ncasimirs)]
-        casimirs_error = [np.amax(np.abs(self.casimir(sol.y, k=k)  - casimirs_init[k]), axis=0) for k in range(self.ncasimirs)]
+        casimirs_init = [self.casimir(x0, k=k) for k in range(self.ncasimirs)]
+        casimirs_error = [np.amax(np.abs(self.casimir(x[:self.N, :], k=k)  - casimirs_init[k]), axis=0) for k in range(self.ncasimirs)]
         for _, (cas, err) in enumerate(zip(casimirs_init, casimirs_error)):
             print(f'\033[90m        Error in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
     
@@ -200,6 +221,34 @@ class HamLorenz:
         dy = irfft(np.exp(-2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
+    def compute_lyapunov(self, tf, x0, reortho_dt, tol=1e-8, plot=True):
+        start = time.time()
+        lyap_sum = np.zeros(self.N, dtype=np.float64)
+        x, Q = x0.copy(), np.eye(self.N, dtype=np.float64)
+        steps = int(tf / reortho_dt)
+        for _ in range(steps):
+            z0 = np.concatenate((x, Q), axis=None)
+            sol = solve_ivp(self.z_dot, (0, reortho_dt), z0, method='RK45', t_eval=[reortho_dt], atol=tol, rtol=tol)
+            z1 = sol.y[:, -1]
+            x, Q = z1[:self.N], z1[self.N:].reshape((self.N, self.N))
+            Q, R = np.linalg.qr(Q)
+            lyap_sum += np.log(np.abs(np.diag(R)))
+        print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
+        self._compute_error(x[:, np.newaxis], x0)
+        lyap_sort = np.sort(lyap_sum / tf)
+        print(f'\033[90m        Error in spectrum = {np.amax(np.abs(lyap_sort + lyap_sort[::-1])):.2e} \033[00m')
+        if plot:
+            plt.figure(figsize=(8, 4))
+            plt.plot(lyap_sort, linewidth=2)
+            plt.xlabel(r'$n$', fontsize=12)
+            plt.ylabel(r'$\lambda_n$', fontsize=12)
+            plt.title(r'Lyapunov exponents', fontsize=14)
+            plt.xlim([1, self.N])
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+        return lyap_sort
+    
     def desymmetrize(self, vec):
         xf = fft(vec, axis=0)
         phase = np.unwrap(np.angle(xf[1, :]))
@@ -209,7 +258,7 @@ class HamLorenz:
     def plot_timeseries(self, sol):
         panel_width, panel_height = 3, 5
         colorbar_width = 0.5
-        field, field_sym = sol.y, self.desymmetrize(sol.y)
+        field, field_sym = sol.y[:self.N, :], self.desymmetrize(sol.y[:self.N, :])
         cmap = 'RdBu_r'
         fig_width = 2 * panel_width + colorbar_width + 1.0
         fig_height = panel_height + 1.0
@@ -237,8 +286,8 @@ class HamLorenz:
         plt.show()
 
     def plot_pdf(self, sol):
-        X_t = zscore(sol.y.flatten(), ddof=1)
-        Y_t = zscore(self.phi(sol.y.flatten()), ddof=1)
+        X_t = zscore(sol.y[:self.N, :].flatten(), ddof=1)
+        Y_t = zscore(self.phi(sol.y[:self.N, :].flatten()), ddof=1)
         kde_x, kde_y = gaussian_kde(X_t), gaussian_kde(Y_t)
         x_vals, y_vals = np.linspace(min(X_t), max(X_t), 200), np.linspace(min(Y_t), max(Y_t), 200)
         pdf_kde_x, pdf_kde_y = kde_x(x_vals), kde_y(y_vals)
@@ -260,6 +309,7 @@ class HamLorenz:
 
     def save2matlab(self, sol, filename='data'):
         mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
-        mdic.update({'t': sol.t, 'X': sol.y.T, 'Xs': self.desymmetrize(sol.y).T})
+        mdic.update({'t': sol.t, 'X': sol.y[:self.N, :].T, 'Xs': self.desymmetrize(sol.y[:self.N, :]).T})
+        mdic.update({'Casimirs': self.casimir_coeffs})
         savemat(filename + '.mat', mdic)
         print(f'\033[90m        Results saved in {filename}.mat \033[00m')
