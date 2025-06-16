@@ -39,24 +39,27 @@ import warnings
 import time
 from datetime import date
 
+def PeriodicKroneckerDelta(i, j, N):
+    return sp.KroneckerDelta(i % N, j % N)
+
 class HamLorenz:
-    def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, method='ode45'): 
+    def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
+        x, y = sp.symbols('x y')
+        if f is None and phi is None:
+            phi, f, invphi = self.cubic_model(b=b)
         self.K, self.N = K, N
         self.method = method
         self.xi = np.asarray(xi)
         if isinstance(xi, (int, float)):
-            self.xi = np.full(xi, K)
+            self.xi = np.full(K, xi)
         elif len(self.xi) != K:
             raise ValueError('The length of xi should be K.')
-        if f is None and phi is None:
-            raise ValueError('Either f or phi must be provided.')
-        x, y = sp.symbols('x y')
         if f is None:
             phi_expr = phi
             f_expr = 1 / sp.diff(phi_expr, x)
         elif phi is None:
             f_expr = f
-            phi_expr = f, sp.integrate(1 / f_expr, x)
+            phi_expr = sp.integrate(1 / f_expr, x)
         else:
             f_expr, phi_expr = f, phi
         dphi_expr = sp.diff(phi_expr, x)
@@ -71,9 +74,22 @@ class HamLorenz:
         self._n = np.arange(N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
-        self.ncasimirs = self.K + 1 if np.array_equal(self.xi, self.xi[::-1]) and self.N % (self.K + 1) == 0 else 1
         kfreq = 2 * np.pi * rfftfreq(self.N)
         self.R = 2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
+        J = sp.Matrix(self.N, self.N,\
+                         lambda n, m: sum(self.xi[k - 1] * (PeriodicKroneckerDelta(n, m - k, self.N)\
+                                                       - PeriodicKroneckerDelta(n, m + k, self.N)) for k in range(1, K + 1)))
+        J_null = J.nullspace()
+        self.casimir_coeffs = [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in J_null]
+        self.ncasimirs = len(self.casimir_coeffs)   
+
+    def cubic_model(self, b=1):
+        x, y = sp.symbols('x y')
+        phi = x + b * x**3 / 3
+        f = 1 / (1 + b * x**2)
+        u = 3 * y / (2 * b) + sp.sqrt(1 / b**3 + (3 * y / (2 * b))**2)
+        invphi = u**(1/3) - u**(-1/3) / b
+        return phi, f, invphi
 
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
@@ -156,9 +172,8 @@ class HamLorenz:
         return kappa
     
     def casimir(self, x, k=0):
-        if self.ncasimirs >= 2:
-            return np.sum(self.phi(x[self._indk[k]]), axis=0)
-        return np.sum(self.phi(x), axis=0)
+        coeffs = self.casimir_coeffs[k] if x.ndim==1 else self.casimir_coeffs[k][:, np.newaxis]
+        return np.sum(self.phi(coeffs * x), axis=0 if x.ndim == 2 else None)
     
     def hamiltonian(self, x):
         return np.sum(x**2, axis=0) / 2
@@ -245,6 +260,6 @@ class HamLorenz:
 
     def save2matlab(self, sol, filename='data'):
         mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
-        mdic.update({'t': sol.t, 'X': sol.y})
+        mdic.update({'t': sol.t, 'X': sol.y.T, 'Xs': self.desymmetrize(sol.y).T})
         savemat(filename + '.mat', mdic)
         print(f'\033[90m        Results saved in {filename}.mat \033[00m')
