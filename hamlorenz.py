@@ -225,8 +225,7 @@ class HamLorenz:
         start = time.time()
         lyap_sum = np.zeros(self.N, dtype=np.float64)
         x, Q = x0.copy(), np.eye(self.N, dtype=np.float64)
-        steps = int(tf / reortho_dt)
-        for _ in range(steps):
+        for _ in range(int(tf / reortho_dt)):
             z0 = np.concatenate((x, Q), axis=None)
             sol = solve_ivp(self.z_dot, (0, reortho_dt), z0, method='RK45', t_eval=[reortho_dt], atol=tol, rtol=tol)
             z1 = sol.y[:, -1]
