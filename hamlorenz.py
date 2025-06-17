@@ -37,14 +37,11 @@ import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
-from scipy.integrate._ivp import ivp
+from scipy.integrate._ivp.ivp import METHODS as IVP_METHODS
 from scipy.io import savemat
 import warnings
 import time
 from datetime import date
-
-def PeriodicKroneckerDelta(i, j, N):
-    return sp.KroneckerDelta(i % N, j % N)
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
@@ -81,14 +78,9 @@ class HamLorenz:
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
         kfreq = 2 * np.pi * rfftfreq(self.N)
         self.R = 2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
-        J = sp.Matrix(self.N, self.N,\
-                         lambda n, m: sum(self.xi[k - 1] * (PeriodicKroneckerDelta(n, m - k, self.N)\
-                                                       - PeriodicKroneckerDelta(n, m + k, self.N)) for k in range(1, K + 1)))
-        J_null = J.nullspace()
-        self.casimir_coeffs = [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in J_null]
-        self.ncasimirs = len(self.casimir_coeffs)   
-        self.delta_p = np.asarray([np.roll(np.eye(self.N, dtype=int), shift=-k, axis=0) for k in range(self.K + 1)])
-        self.delta_n = np.asarray([np.roll(np.eye(self.N, dtype=int), shift=k, axis=0) for k in range(self.K + 1)])
+        self.casimir_coeffs = self.determine_casimirs()
+        self.ncasimirs = len(self.casimir_coeffs)  
+        self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
 
     def cubic_model(self, b=1):
         x, y = sp.symbols('x y')
@@ -97,6 +89,16 @@ class HamLorenz:
         u = 3 * y / (2 * b) + sp.sqrt(1 / b**3 + (3 * y / (2 * b))**2)
         invphi = u**(1/3) - u**(-1/3) / b
         return phi, f, invphi
+    
+    def determine_casimirs(self):
+        def PeriodicKroneckerDelta(i, j):
+            return sp.KroneckerDelta(i % self.N, j % self.N)
+        J = sp.Matrix(self.N, self.N,\
+            lambda n, m: sum(self.xi[k - 1] * (PeriodicKroneckerDelta(n, m - k)\
+                                             - PeriodicKroneckerDelta(n, m + k))\
+                                                for k in range(1, self.K + 1)))
+        J_null = J.nullspace()
+        return [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in J_null] 
 
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
@@ -117,14 +119,15 @@ class HamLorenz:
         roots = np.fromiter((solve_scalar(xi, x0i) for xi, x0i in zip(x.flat, x0s.flat)), dtype=float)
         return roots.reshape(x.shape)
     
-    def _shifts(self, vec):
-        pshift = np.asarray([np.roll(vec, -k) for k in range(1, self.K + 1)])
-        nshift = np.asarray([np.roll(vec, k) for k in range(1, self.K + 1)])
+    def _shifts(self, vec, axis=None):
+        pshift = np.asarray([np.roll(vec, -k, axis=axis) for k in range(1, self.K + 1)])
+        nshift = np.asarray([np.roll(vec, k, axis=axis) for k in range(1, self.K + 1)])
         return pshift, nshift
 
     def x_dot(self, _, x):
-        pshift, nshift = self._shifts(x * self.f(x))
-        return self.f(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+        fx = self.f(x)
+        pshift, nshift = self._shifts(x * fx)
+        return fx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
     
     def y_dot(self, _, y):
         x = self._invphi(y)
@@ -137,10 +140,11 @@ class HamLorenz:
         return np.concatenate((dxdt, dQdt), axis=None)
     
     def jacobian(self, x):
-        pshift, nshift = self._shifts(x * self.f(x))
-        diag = np.diag(self.df(x) * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0))
-        pshift, nshift = self._shifts(self.f(x) + x * self.df(x))
-        off_diag = np.sum(self.f(x)[np.newaxis, :, np.newaxis] * self.xi[:, np.newaxis, np.newaxis]\
+        fx, dfx = self.f(x), self.df(x)
+        pshift, nshift = self._shifts(x * fx)
+        diag = np.diag(dfx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0))
+        pshift, nshift = self._shifts(fx + x * dfx)
+        off_diag = np.sum(fx[np.newaxis, :, np.newaxis] * self.xi[:, np.newaxis, np.newaxis]\
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         return diag + off_diag
     
@@ -161,7 +165,7 @@ class HamLorenz:
     
     def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
         start = time.time()
-        if method in ivp.METHODS:
+        if method in IVP_METHODS:
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
         elif method in METHODS:
             if len(x) % (self.K + 1) == 0:
