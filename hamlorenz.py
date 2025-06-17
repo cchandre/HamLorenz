@@ -27,12 +27,14 @@
 
 import numpy as np
 import sympy as sp
+from multiprocessing.dummy import Pool as ThreadPool
 from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
 from scipy.sparse.linalg import eigs
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
 from scipy.integrate._ivp import ivp
@@ -143,7 +145,8 @@ class HamLorenz:
         return diag + off_diag
     
     def generate_initial_conditions(self, N, energy=1, casimirs=0):
-        X = 2 * np.random.randn(N) - 1
+        rng = np.random.default_rng()
+        X = rng.standard_normal(N)
         X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
         casimirs = np.atleast_1d(casimirs)
         if len(casimirs) != self.ncasimirs:
@@ -221,13 +224,42 @@ class HamLorenz:
         dy = irfft(np.exp(-2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
-    def compute_lyapunov(self, tf, x0, reortho_dt, tol=1e-8, plot=True):
+    def compute_ps(self, x, tf, ps, method='RK45', tol=1e-8, step=1e-2):
+        local_ps = lambda _, y: ps(y)
+        local_ps.terminal, local_ps.direction = False, +1
+        def worker(x_):
+            sol = self.integrate(tf, x_, method=method, events=local_ps, step=step, tol=tol)
+            return sol.y_events[0]
+        with ThreadPool(processes=4) as pool:
+            result = pool.map(worker, x)
+        return result
+    
+    def plot_ps(self, vec, indices):
+        fig = plt.figure(figsize=(6, 6))
+        if len(indices) != 2 and len(indices) != 3:
+            raise ValueError('The indices should be of length 2 or 3.')
+        if len(indices) == 2:
+            ax = fig.add_subplot()
+            for x in vec:
+                ax.plot(x[:, indices[0]], x[:, indices[1]], marker='.', markersize=5)
+        else:
+            ax = fig.add_subplot(111, projection='3d')
+            for x in vec:
+                ax.plot(x[:, indices[0]], x[:, indices[1]], x[:, indices[2]], marker='.', markersize=5)
+            ax.set_zlabel(f'$X_{{{indices[2]}}}$', fontsize=12)
+        ax.set_xlabel(f'$X_{{{indices[0]}}}$', fontsize=12)
+        ax.set_ylabel(f'$X_{{{indices[1]}}}$', fontsize=12)
+        ax.set_title(r'Poincaré section', fontsize=14)
+        plt.tight_layout()
+        plt.show()
+    
+    def compute_lyapunov(self, tf, x0, reortho_dt, tol=1e-8, method='RK45', plot=True):
         start = time.time()
         lyap_sum = np.zeros(self.N, dtype=np.float64)
         x, Q = x0.copy(), np.eye(self.N, dtype=np.float64)
         for _ in range(int(tf / reortho_dt)):
             z0 = np.concatenate((x, Q), axis=None)
-            sol = solve_ivp(self.z_dot, (0, reortho_dt), z0, method='RK45', t_eval=[reortho_dt], atol=tol, rtol=tol)
+            sol = solve_ivp(self.z_dot, (0, reortho_dt), z0, method=method, t_eval=[reortho_dt], atol=tol, rtol=tol)
             z1 = sol.y[:, -1]
             x, Q = z1[:self.N], z1[self.N:].reshape((self.N, self.N))
             Q, R = np.linalg.qr(Q)
