@@ -1,4 +1,4 @@
-#Hamiltonian Lorenz models
+# Hamiltonian Lorenz models
 
 The documentation and examples are available on the [wiki page](https://github.com/cchandre/HamLorenz/wiki).
 
