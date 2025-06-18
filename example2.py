@@ -1,21 +1,20 @@
-import numpy as np
 from hamlorenz import HamLorenz
 
-N= 100
-
-tf = 1e4
-
-energy = 25
-casimirs = [24.8, 22.7]
+N = 6
+tf = 6e4
 
 hl = HamLorenz(N)
 
-x0 = hl.generate_initial_conditions(N, energy=energy, casimirs=casimirs)
+E = 8.074451109489349
 
-sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='BM4', step=1e-1)
+a1 = 2.242245751187437
 
-hl.plot_timeseries(sol)
+Nt = 20
 
-hl.plot_pdf(sol)
+x0 = [hl.generate_initial_conditions(N, energy=E, casimirs=[2, 18]) for _ in range(Nt)]
 
-hl.save2matlab(sol, filename='testdata')
+result = hl.compute_ps(x0, tf, ps=lambda y: y[5] - a1, dir=-1, tol=1e-6, step=1e-1)
+
+hl.save2matlab(result, filename='testdata')
+
+hl.plot_ps(result, indices=(0, 1, 2))
