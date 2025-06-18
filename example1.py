@@ -1,0 +1,20 @@
+from hamlorenz import HamLorenz
+
+N = 6
+tf = 3e4
+
+hl = HamLorenz(N)
+
+E = 8.074451109489349
+
+a1 = 2.242245751187437
+
+Nt = 48
+
+x0 = [hl.generate_initial_conditions(N, energy=E, casimirs=[2, 18]) for _ in range(Nt)]
+
+result = hl.compute_ps(x0, tf, ps=lambda y: y[5] - a1, dir=-1, tol=1e-5, step=1e-1)
+
+hl.save2matlab(result, filename='testdata')
+
+hl.plot_ps(result, indices=(0, 1, 2))

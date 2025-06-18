@@ -236,9 +236,9 @@ class HamLorenz:
         dy = irfft(np.exp(-2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
-    def compute_ps(self, x, tf, ps, method='RK45', tol=1e-8, step=1e-2):
+    def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
         event_func = lambda _, y: ps(y)
-        event_func.terminal, event_func.direction = False, +1
+        event_func.terminal, event_func.direction = False, dir
         args = [(self, tf, x_, None, event_func, method, step, tol) for x_ in x]
         with Pool() as pool:
             result = pool.map(integrate_wrapper, args)
