@@ -31,14 +31,14 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
+from scipy.integrate import solve_ivp
 from scipy.integrate._ivp.ivp import OdeSolution
+from scipy.integrate._ivp.ivp import METHODS as IVP_METHODS
+from scipy.io import savemat
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
-from scipy.integrate import solve_ivp
 from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
-from scipy.integrate._ivp.ivp import METHODS as IVP_METHODS
-from scipy.io import savemat
 import warnings
 import time
 from datetime import date
@@ -251,7 +251,8 @@ class HamLorenz:
         if len(indices) == 2:
             ax = fig.add_subplot()
             for x in vec:
-                ax.plot(x[:, indices[0]], x[:, indices[1]], marker='.', markersize=5, linestyle='None')
+                if x.ndim == 2:
+                    ax.plot(x[:, indices[0]], x[:, indices[1]], marker='.', markersize=5, linestyle='None')
         else:
             ax = fig.add_subplot(111, projection='3d')
             for x in vec:
