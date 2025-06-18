@@ -27,11 +27,11 @@
 
 import numpy as np
 import sympy as sp
-from multiprocessing.dummy import Pool as ThreadPool
+from pathos.multiprocessing import ProcessingPool as Pool
 from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
-from scipy.sparse.linalg import eigs
+from scipy.integrate._ivp.ivp import OdeSolution
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
@@ -42,6 +42,11 @@ from scipy.io import savemat
 import warnings
 import time
 from datetime import date
+
+def integrate_wrapper(args):
+    obj, *rest = args
+    sol = obj.integrate(*rest)
+    return sol.y_events[0]
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
@@ -148,20 +153,23 @@ class HamLorenz:
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         return diag + off_diag
     
-    def generate_initial_conditions(self, N, energy=1, casimirs=0):
-        rng = np.random.default_rng()
-        X = rng.standard_normal(N)
-        X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
-        casimirs = np.atleast_1d(casimirs)
-        if len(casimirs) != self.ncasimirs:
-            casimirs = casimirs[0] * np.ones(self.ncasimirs)
-        cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
-        for k in range(self.ncasimirs):
-            cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
-        result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP')
-        if not result.success:
-            raise RuntimeError("Optimization failed: " + result.message)
-        return result.x
+    def generate_initial_conditions(self, N, energy=1, casimirs=0, ntry=5):
+        for _ in range(ntry):
+            try: 
+                rng = np.random.default_rng()
+                X = rng.standard_normal(N)
+                X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
+                casimirs = np.atleast_1d(casimirs)
+                if len(casimirs) != self.ncasimirs:
+                    casimirs = casimirs[0] * np.ones(self.ncasimirs)
+                cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
+                for k in range(self.ncasimirs):
+                    cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
+                result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP')
+                return result.x
+            except RuntimeError:
+                pass
+        raise RuntimeError("Optimization failed: " + result.message)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
         start = time.time()
@@ -229,13 +237,11 @@ class HamLorenz:
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
     def compute_ps(self, x, tf, ps, method='RK45', tol=1e-8, step=1e-2):
-        local_ps = lambda _, y: ps(y)
-        local_ps.terminal, local_ps.direction = False, +1
-        def worker(x_):
-            sol = self.integrate(tf, x_, method=method, events=local_ps, step=step, tol=tol)
-            return sol.y_events[0]
-        with ThreadPool(processes=4) as pool:
-            result = pool.map(worker, x)
+        event_func = lambda _, y: ps(y)
+        event_func.terminal, event_func.direction = False, +1
+        args = [(self, tf, x_, None, event_func, method, step, tol) for x_ in x]
+        with Pool() as pool:
+            result = pool.map(integrate_wrapper, args)
         return result
     
     def plot_ps(self, vec, indices):
@@ -245,11 +251,11 @@ class HamLorenz:
         if len(indices) == 2:
             ax = fig.add_subplot()
             for x in vec:
-                ax.plot(x[:, indices[0]], x[:, indices[1]], marker='.', markersize=5)
+                ax.plot(x[:, indices[0]], x[:, indices[1]], marker='.', markersize=5, linestyle='None')
         else:
             ax = fig.add_subplot(111, projection='3d')
             for x in vec:
-                ax.plot(x[:, indices[0]], x[:, indices[1]], x[:, indices[2]], marker='.', markersize=5)
+                ax.plot(x[:, indices[0]], x[:, indices[1]], x[:, indices[2]], marker='.', markersize=5, linestyle='None')
             ax.set_zlabel(f'$X_{{{indices[2]}}}$', fontsize=12)
         ax.set_xlabel(f'$X_{{{indices[0]}}}$', fontsize=12)
         ax.set_ylabel(f'$X_{{{indices[1]}}}$', fontsize=12)
@@ -342,9 +348,12 @@ class HamLorenz:
         plt.tight_layout()
         plt.show()
 
-    def save2matlab(self, sol, filename='data'):
+    def save2matlab(self, data, filename='data'):
         mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
-        mdic.update({'t': sol.t, 'X': sol.y[:self.N, :].T, 'Xs': self.desymmetrize(sol.y[:self.N, :]).T})
+        if isinstance(data, OdeSolution):
+            mdic.update({'t': data.t, 'X': data.y[:self.N, :].T, 'Xs': self.desymmetrize(data.y[:self.N, :]).T})
+        else:
+            mdic.update({'data': data})
         mdic.update({'Casimirs': self.casimir_coeffs})
         savemat(filename + '.mat', mdic)
         print(f'\033[90m        Results saved in {filename}.mat \033[00m')
