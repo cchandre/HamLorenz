@@ -42,5 +42,7 @@ For a full mathematical formulation and analysis of these models, see:
 
 ### Documentation & Examples
 
-The full documentation, including detailed function explanations and example notebooks, is available on the [Wiki Page](https://github.com/cchandre/HamLorenz/wiki).
+Examples can be found at [Examples](https://github.com/cchandre/HamLorenz/wiki/Examples)
+
+The full documentation, including detailed function explanations, is available on the [Wiki Page](https://github.com/cchandre/HamLorenz/wiki).
 
