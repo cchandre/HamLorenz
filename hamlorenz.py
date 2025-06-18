@@ -46,7 +46,7 @@ from datetime import date
 def integrate_wrapper(args):
     obj, *rest = args
     sol = obj.integrate(*rest)
-    return sol.y_events[0]
+    return np.asarray(sol.y_events[0])
 
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
