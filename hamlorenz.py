@@ -247,7 +247,7 @@ class HamLorenz:
     def plot_ps(self, vec, indices):
         fig = plt.figure(figsize=(6, 6))
         if len(indices) != 2 and len(indices) != 3:
-            raise ValueError('The indices should be of length 2 or 3.')
+            raise ValueError('The indices in plot_ps should be of length 2 or 3.')
         if len(indices) == 2:
             ax = fig.add_subplot()
             for x in vec:
@@ -255,7 +255,8 @@ class HamLorenz:
         else:
             ax = fig.add_subplot(111, projection='3d')
             for x in vec:
-                ax.plot(x[:, indices[0]], x[:, indices[1]], x[:, indices[2]], marker='.', markersize=5, linestyle='None')
+                if x.ndim == 2:
+                    ax.plot(x[:, indices[0]], x[:, indices[1]], x[:, indices[2]], marker='.', markersize=5, linestyle='None')
             ax.set_zlabel(f'$X_{{{indices[2]}}}$', fontsize=12)
         ax.set_xlabel(f'$X_{{{indices[0]}}}$', fontsize=12)
         ax.set_ylabel(f'$X_{{{indices[1]}}}$', fontsize=12)

@@ -9,7 +9,7 @@ E = 8.074451109489349
 
 a1 = 2.242245751187437
 
-Nt = 20
+Nt = 200
 
 x0 = [hl.generate_initial_conditions(N, energy=E, casimirs=[2, 18]) for _ in range(Nt)]
 
