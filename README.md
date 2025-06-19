@@ -4,9 +4,9 @@ This package implements **Hamiltonian Lorenz-like models**, a class of low-order
 
 ### Features
 
-* **Hamiltonian structure**: The time evolution of the system is derived from a Hamiltonian, preserving energy exactly in the continuous-time limit.
+* **Hamiltonian structure**: The time evolution of the system is derived from a Hamiltonian, preserving energy exactly as in the continuous-time limit.
 * **Casimir invariants**: Multiple conserved quantities beyond energy, ensuring the system evolves on a constrained manifold.
-* **Symplectic integrators**: Optional numerical solvers designed for long-time energy preservation.
+* **Symplectic integrators**: Optional numerical solvers designed for long-time energy and Casimir invariant preservation.
 * **Lyapunov spectrum computation**: Quantifies the level of chaos in the system via Lyapunov exponents.
 * **Fourier-based desymmetrization**: Enables symmetry reduction to study physical variables in a more interpretable form.
 * **PDF and time series visualization**: Built-in tools to analyze and visualize system statistics and dynamics.
