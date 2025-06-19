@@ -1,6 +1,6 @@
 from hamlorenz import HamLorenz
 
-N= 100
+N = 100
 
 tf = 1e4
 
