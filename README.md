@@ -2,6 +2,16 @@
 
 This package implements **Hamiltonian Lorenz-like models**, a class of low-order dynamical systems that extend the classical Lorenz-96 and Lorenz-2005 frameworks by incorporating a **Hamiltonian structure**. These models are designed to preserve certain physical invariants—such as energy and Casimirs—making them particularly well-suited for studying conservative dynamical systems, geophysical flows, and chaotic transport.
 
+![PyPI](https://img.shields.io/pypi/v/hamlorenz)
+![License](https://img.shields.io/badge/license-BSD-lightgray)
+
+## Installation 
+Installation within a Python virtual environment: 
+```
+python3 -m pip install hamlorenz
+```
+For more information on creating a Python virtual environment, click [here](https://realpython.com/python-virtual-environments-a-primer/).
+
 ### Features
 
 * **Hamiltonian structure**: The time evolution of the system is derived from a Hamiltonian, preserving energy exactly as in the continuous-time limit.
