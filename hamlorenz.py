@@ -48,6 +48,17 @@ def integrate_wrapper(args):
     sol = obj.integrate(*rest)
     return sol.y_events[0]
 
+def ask_for_value(prompt="Select a branch: ", valid_values=None):
+    while True:
+        try:
+            value = int(input(prompt))
+            if valid_values is None or value in valid_values:
+                return value
+            else:
+                print(f"Valid options are: {list(valid_values)}")
+        except ValueError:
+            print("Invalid input. Please enter an integer.")
+
 class HamLorenz:
     def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
         x, y = sp.symbols('x y')
@@ -58,8 +69,11 @@ class HamLorenz:
         self.xi = np.asarray(xi)
         if isinstance(xi, (int, float)):
             self.xi = np.full(K, xi)
-        elif len(self.xi) != K:
-            raise ValueError('The length of xi should be K.')
+        elif len(self.xi) >= K:
+            self.xi = self.xi[:K]
+        elif len(self.xi) < K:
+            self.xi = np.full(K, self.xi[0])
+            warnings.warn('The length of xi should be K. Using the first value of xi for all K.', UserWarning)
         if f is None:
             phi_expr = phi
             f_expr = 1 / sp.diff(phi_expr, x)
@@ -68,14 +82,14 @@ class HamLorenz:
             phi_expr = sp.integrate(1 / f_expr, x)
         else:
             f_expr, phi_expr = f, phi
+        invphi_expr = invphi if invphi is not None else self.determine_invphi(phi_expr)
         df_expr, dphi_expr = sp.diff(f_expr, x), sp.diff(phi_expr, x)
-        invphi_expr = invphi
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
             raise ValueError('The functions f and phi are not compatible.')
         self.f = sp.lambdify(x, f_expr, modules='numpy')
         self.phi = sp.lambdify(x, phi_expr, modules='numpy')
-        self.invphi = None if invphi == None else sp.lambdify(y, invphi_expr, modules='numpy')
+        self.invphi = sp.lambdify(y, invphi_expr, modules='numpy') if invphi_expr is not None else None
         self.dphi = sp.lambdify(x, dphi_expr, modules='numpy')
         self.df = sp.lambdify(x, df_expr, modules='numpy')
         self._n = np.arange(N)
@@ -95,6 +109,21 @@ class HamLorenz:
         invphi = u**(1/3) - u**(-1/3) / b
         return phi, f, invphi
     
+    def determine_invphi(self, phi):
+        x, y = sp.symbols('x y')
+        sol = sp.solve(sp.Eq(phi, y), x)
+        if len(sol) == 1:
+            return sp.simplify(sol[0])
+        elif len(sol) > 1:
+            print(f'The inverse of phi has {len(sol)} branches:')
+            for i, s in enumerate(sol):
+                print(f'    branch {i}: {s} \033[00m')
+            branch = ask_for_value(valid_values=range(len(sol)))
+            return sp.simplify(sol[branch])
+        else:
+            print("No inverse found.")
+            return None
+
     def determine_casimirs(self):
         def PeriodicKroneckerDelta(i, j):
             return sp.KroneckerDelta(i % self.N, j % self.N)
@@ -160,8 +189,10 @@ class HamLorenz:
                 X = rng.standard_normal(N)
                 X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
                 casimirs = np.atleast_1d(casimirs)
-                if len(casimirs) != self.ncasimirs:
-                    casimirs = casimirs[0] * np.ones(self.ncasimirs)
+                if len(casimirs) >= self.ncasimirs:
+                    casimirs = casimirs[:self.ncasimirs] 
+                elif len(casimirs) < self.ncasimirs:
+                    casimirs = np.full(self.ncasimirs, casimirs[0])
                 cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
                 for k in range(self.ncasimirs):
                     cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})

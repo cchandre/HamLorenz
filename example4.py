@@ -4,17 +4,15 @@ from hamlorenz import HamLorenz
 
 N = 100
 
-tf = 1e3
+tf = 1e2
 
 energy = 15
 casimirs = [10, 12]
 
-x = sp.symbol('x')
+x = sp.symbols('x')
 phi = sp.sinh(x)
-f = 1 / sp.cosh(x)
-invphi = sp.asinh(x)
 
-hl = HamLorenz(N, f=f, phi=phi, invphi=invphi)
+hl = HamLorenz(N, phi=phi)
 
 x0 = hl.generate_initial_conditions(N, energy=energy, casimirs=casimirs)
 
