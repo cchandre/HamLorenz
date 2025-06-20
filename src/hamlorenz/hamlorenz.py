@@ -207,8 +207,6 @@ class HamLorenz:
         raise RuntimeError("Optimization failed: " + result.message)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
-        print(IVP_METHODS)
-        print(METHODS)
         start = time.time()
         if method in IVP_METHODS:
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
