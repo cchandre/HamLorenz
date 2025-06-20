@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project]
+name = "HamLorenz"
+version = "0.1.0"
+license = {text = "BSD-2-Clause"}
+keywords = ["Lorenz models", "Hamiltonian", "symplectic integrators"]
+authors = [
+  {name="Cristel Chandre", email="cristel.chandre@cnrs.fr"},
+]
+maintainers = [
+  {name="Cristel Chandre", email="cristel.chandre@cnrs.fr"},
+]
+description = "Hamiltonian Lorenz-like models"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Astronomy"
+]
+dependencies = [
+	"numpy",
+  "sympy",
+	"scipy",
+  "pathos",
+  "matplotlib"
+]
+
+[project.urls]
+Homepage = "http://github.com/cchandre/HamLorenz"
+GitHub = "http://github.com/cchandre/HamLorenz"

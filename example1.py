@@ -1,5 +1,5 @@
-import numpy as np
 from hamlorenz import HamLorenz
+import numpy as np
 
 N = 100
 
@@ -13,8 +13,6 @@ hl = HamLorenz(N)
 x0 = hl.generate_initial_conditions(N, energy=energy, casimirs=casimirs)
 
 sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='BM4', step=1e-1)
-
-hl.plot_timeseries(sol)
 
 hl.plot_pdf(sol)
 

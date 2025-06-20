@@ -60,29 +60,32 @@ def ask_for_value(prompt="Select a branch: ", valid_values=None):
             print("Invalid input. Please enter an integer.")
 
 class HamLorenz:
-    def __init__(self, N, K=1, xi=1, f=None, phi=None, invphi=None, b=1, method='BM4'): 
-        x, y = sp.symbols('x y')
-        if f is None and phi is None:
-            phi, f, invphi = self.cubic_model(b=b)
-        self.K, self.N = K, N
-        self.method = method
+    def __init__(self, N, K=1, xi=1, f=None, phi=['cubic', 1]): 
+        self.N, self.K = N, K
         self.xi = np.asarray(xi)
         if isinstance(xi, (int, float)):
             self.xi = np.full(K, xi)
         elif len(self.xi) >= K:
             self.xi = self.xi[:K]
-        elif len(self.xi) < K:
+            warnings.warn('The length of xi should be K. Using the first K values of xi.', UserWarning)
+        else:
             self.xi = np.full(K, self.xi[0])
             warnings.warn('The length of xi should be K. Using the first value of xi for all K.', UserWarning)
-        if f is None:
-            phi_expr = phi
-            f_expr = 1 / sp.diff(phi_expr, x)
-        elif phi is None:
-            f_expr = f
-            phi_expr = sp.integrate(1 / f_expr, x)
+        x, y = sp.symbols('x y')
+        if f is None and isinstance(phi, list) and phi[0] == 'cubic':
+            phi_expr, f_expr, invphi_expr = self.cubic_model(b=phi[1])
+        elif isinstance(f, sp.Expr) or isinstance(phi, sp.Expr):
+            if f is None:
+                phi_expr = phi
+                f_expr = 1 / sp.diff(phi_expr, x)
+            elif phi is None:
+                f_expr = f
+                phi_expr = sp.integrate(1 / f_expr, x)
+            else:
+                f_expr, phi_expr = f, phi
+            invphi_expr = self.determine_invphi(phi_expr)
         else:
-            f_expr, phi_expr = f, phi
-        invphi_expr = invphi if invphi is not None else self.determine_invphi(phi_expr)
+            raise ValueError("The function f and/or phi must be SymPy expressions or phi should be ['cubic', float] cubic.")
         df_expr, dphi_expr = sp.diff(f_expr, x), sp.diff(phi_expr, x)
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
@@ -117,9 +120,10 @@ class HamLorenz:
         elif len(sol) > 1:
             print(f'The inverse of phi has {len(sol)} branches:')
             for i, s in enumerate(sol):
-                print(f'    branch {i}: {s} \033[00m')
-            branch = ask_for_value(valid_values=range(len(sol)))
-            return sp.simplify(sol[branch])
+                print(f'    branch {i}: {s}')
+            print(f'    numerical inversion: {len(sol)}')
+            branch = ask_for_value(valid_values=range(len(sol) + 1))
+            return sp.simplify(sol[branch]) if branch < len(sol) else None
         else:
             print("No inverse found.")
             return None
@@ -203,6 +207,8 @@ class HamLorenz:
         raise RuntimeError("Optimization failed: " + result.message)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
+        print(IVP_METHODS)
+        print(METHODS)
         start = time.time()
         if method in IVP_METHODS:
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)

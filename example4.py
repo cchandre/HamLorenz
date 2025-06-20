@@ -1,6 +1,6 @@
-import sympy as sp
-import numpy as np
 from hamlorenz import HamLorenz
+import numpy as np
+import sympy as sp
 
 N = 100
 
