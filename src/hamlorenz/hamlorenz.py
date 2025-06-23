@@ -161,7 +161,10 @@ class HamLorenz:
         pshift = np.asarray([np.roll(vec, -k, axis=axis) for k in range(1, self.K + 1)])
         nshift = np.asarray([np.roll(vec, k, axis=axis) for k in range(1, self.K + 1)])
         return pshift, nshift
-
+    
+    def l96_dot(self, _, x):
+        return np.sum(self.xi[:, np.newaxis] * (np.roll(x, -1) - np.roll(x, 1)), axis=0)
+    
     def x_dot(self, _, x):
         fx = self.f(x)
         pshift, nshift = self._shifts(x * fx)
@@ -268,7 +271,7 @@ class HamLorenz:
     def coupling(self, h, y, omega=10):
         y1, y2 = np.split(y, 2)
         sy = (y1 + y2) / 2
-        dy = irfft(np.exp(-2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
+        dy = irfft(np.exp(2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
     def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
