@@ -18,7 +18,7 @@ For more information on creating a Python virtual environment, click [here](http
 * **Casimir invariants**: Multiple conserved quantities beyond energy, ensuring the system evolves on a constrained manifold.
 * **Symplectic integrators**: Optional numerical solvers designed for long-time energy and Casimir invariant preservation.
 * **Lyapunov spectrum computation**: Quantifies the level of chaos in the system via Lyapunov exponents.
-* **Fourier-based desymmetrization**: Enables symmetry reduction to study physical variables in a more interpretable form.
+* **Fourier-based desymmetrization**: Enables translational symmetry reduction to study physical variables in a more interpretable form.
 * **PDF and time series visualization**: Built-in tools to analyze and visualize system statistics and dynamics.
 
 ### Applications
