@@ -86,6 +86,7 @@ class HamLorenz:
             invphi_expr = self.determine_invphi(phi_expr)
         else:
             raise ValueError("The function f and/or phi must be SymPy expressions or phi should be ['cubic', float] cubic.")
+        self.phi_matlab = '@(x)' + sp.printing.octave.octave_code(phi_expr)
         df_expr, dphi_expr = sp.diff(f_expr, x), sp.diff(phi_expr, x)
         compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
         if compatibility_check != 0:
@@ -113,8 +114,9 @@ class HamLorenz:
         return phi, f, invphi
     
     def determine_invphi(self, phi):
-        x, y = sp.symbols('x y')
+        x, y = sp.Symbol('x', real=True), sp.Symbol('y', real=True)
         sol = sp.solve(sp.Eq(phi, y), x)
+        sol = [s for s in sol if sp.im(s.subs(y, 1)).evalf() == 0]
         if len(sol) == 1:
             return sp.simplify(sol[0])
         elif len(sol) > 1:
@@ -189,7 +191,7 @@ class HamLorenz:
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         return diag + off_diag
     
-    def generate_initial_conditions(self, N, energy=1, casimirs=0, ntry=5):
+    def generate_initial_conditions(self, N, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5):
         for _ in range(ntry):
             try: 
                 rng = np.random.default_rng()
@@ -203,7 +205,13 @@ class HamLorenz:
                 cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
                 for k in range(self.ncasimirs):
                     cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
-                result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP')
+                if xmin is not None and xmax is not None:
+                    xmin = np.full(N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
+                    xmax = np.full(N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
+                    bounds = list(zip(xmin, xmax))
+                else:
+                    bounds = None
+                result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP', bounds=bounds)
                 return result.x
             except RuntimeError:
                 pass
@@ -390,10 +398,13 @@ class HamLorenz:
 
     def save2matlab(self, data, filename='data'):
         mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
+        mdic.update({'phi': self.phi_matlab, 'N': self.N, 'K': self.K, 'xi': self.xi.tolist()})
+        mdic.update({'Casimirs': self.casimir_coeffs})
         if isinstance(data, OdeSolution):
-            mdic.update({'t': data.t, 'X': data.y[:self.N, :].T, 'Xs': self.desymmetrize(data.y[:self.N, :]).T})
+            X = data.y[:self.N, :].T
+            Y = self.phi(X)
+            mdic.update({'t': data.t, 'X': X, 'Y': Y, 'Xs': self.desymmetrize(X).T, 'Ys': self.desymmetrize(Y).T})
         else:
             mdic.update({'data': data})
-        mdic.update({'Casimirs': self.casimir_coeffs})
         savemat(filename + '.mat', mdic)
         print(f'\033[90m        Results saved in {filename}.mat \033[00m')
