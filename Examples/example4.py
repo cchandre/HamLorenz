@@ -4,12 +4,12 @@ import sympy as sp
 
 N = 100
 
-tf = 1e2
+tf = 1e3
 
 energy = 15
 casimirs = [10, 12]
 
-x = sp.symbols('x')
+x = sp.Symbol('x', real=True)
 phi = sp.sinh(x)
 
 hl = HamLorenz(N, phi=phi)

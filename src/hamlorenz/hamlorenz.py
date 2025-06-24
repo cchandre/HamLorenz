@@ -71,7 +71,7 @@ class HamLorenz:
         else:
             self.xi = np.full(K, self.xi[0])
             warnings.warn('The length of xi should be K. Using the first value of xi for all K.', UserWarning)
-        x, y = sp.symbols('x y')
+        x, y = sp.Symbol('x', real=True), sp.Symbol('y', real=True)
         if f is None and isinstance(phi, list) and phi[0] == 'cubic':
             phi_expr, f_expr, invphi_expr = self.cubic_model(b=phi[1])
         elif isinstance(f, sp.Expr) or isinstance(phi, sp.Expr):
@@ -106,7 +106,7 @@ class HamLorenz:
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
 
     def cubic_model(self, b=1):
-        x, y = sp.symbols('x y')
+        x, y = sp.Symbol('x', real=True), sp.Symbol('y', real=True)
         phi = x + b * x**3 / 3
         f = 1 / (1 + b * x**2)
         u = 3 * y / (2 * b) + sp.sqrt(1 / b**3 + (3 * y / (2 * b))**2)
