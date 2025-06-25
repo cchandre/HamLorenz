@@ -132,14 +132,18 @@ class HamLorenz:
             return None
 
     def determine_casimirs(self):
-        def PeriodicKroneckerDelta(i, j):
-            return sp.KroneckerDelta(i % self.N, j % self.N)
-        J = sp.Matrix(self.N, self.N,\
-            lambda n, m: sum(self.xi[k - 1] * (PeriodicKroneckerDelta(n, m - k)\
-                                             - PeriodicKroneckerDelta(n, m + k))\
+        delta = lambda i, j: sp.KroneckerDelta(i % self.N, j % self.N)
+        Jsp = sp.Matrix(self.N, self.N,\
+            lambda n, m: sum(self.xi[k - 1] * (delta(n, m - k) - delta(n, m + k))\
                                                 for k in range(1, self.K + 1)))
-        J_null = J.nullspace()
-        return [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in J_null] 
+        Jsp_null = Jsp.nullspace()
+        casimirs = [np.array(c.evalf(), dtype=np.float64).reshape(self.N) for c in Jsp_null]
+        Jnp = np.array(Jsp.evalf(), dtype=np.float64)
+        output = []
+        for c in casimirs:
+            if np.allclose(Jnp @ c, 0, atol=1e-5): 
+                output.append(c)
+        return output
 
     def _invphi(self, x, x0=None):
         if self.invphi is not None:
