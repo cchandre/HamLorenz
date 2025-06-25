@@ -218,7 +218,7 @@ class HamLorenz:
                 pass
         raise RuntimeError("Optimization failed: " + result.message)
     
-    def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8):
+    def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8, omega=10):
         start = time.time()
         if method in IVP_METHODS:
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
@@ -228,7 +228,7 @@ class HamLorenz:
             else:
                 hs = HamSys(btype='other')
                 hs.coupling, hs.y_dot = self.coupling, self.y_dot
-                sol = solve_ivp_sympext(hs, (0, tf), self.phi(x), t_eval=t_eval, method=method, step=step, omega=1)
+                sol = solve_ivp_sympext(hs, (0, tf), self.phi(x), t_eval=t_eval, method=method, step=step, omega=omega)
                 sol.y = self._invphi(sol.y)
         else:
             raise ValueError('The chosen method is not valid.')
