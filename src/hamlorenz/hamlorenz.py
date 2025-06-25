@@ -34,6 +34,7 @@ from scipy.stats import gaussian_kde, norm, zscore
 from scipy.integrate import solve_ivp
 from scipy.integrate._ivp.ivp import OdeSolution
 from scipy.integrate._ivp.ivp import METHODS as IVP_METHODS
+from scipy.stats import skew
 from scipy.io import savemat
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -191,11 +192,11 @@ class HamLorenz:
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         return diag + off_diag
     
-    def generate_initial_conditions(self, N, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5):
+    def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5):
         for _ in range(ntry):
             try: 
                 rng = np.random.default_rng()
-                X = rng.standard_normal(N)
+                X = rng.standard_normal(self.N)
                 X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
                 casimirs = np.atleast_1d(casimirs)
                 if len(casimirs) >= self.ncasimirs:
@@ -206,8 +207,8 @@ class HamLorenz:
                 for k in range(self.ncasimirs):
                     cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
                 if xmin is not None and xmax is not None:
-                    xmin = np.full(N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
-                    xmax = np.full(N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
+                    xmin = np.full(self.N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
+                    xmax = np.full(self.N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
                     bounds = list(zip(xmin, xmax))
                 else:
                     bounds = None
@@ -337,6 +338,12 @@ class HamLorenz:
             plt.tight_layout()
             plt.show()
         return lyap_sort
+    
+    def skewness(self, sol, n_init=0, var='X'):
+        X_t = sol.y[:self.N, n_init:].flatten()
+        if var == 'Y':
+            Y_t = self.phi(X_t)
+        return skew(X_t) if var == 'X' else skew(Y_t)
     
     def desymmetrize(self, vec):
         xf = fft(vec, axis=0)

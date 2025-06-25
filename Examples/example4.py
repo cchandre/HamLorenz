@@ -14,7 +14,7 @@ phi = sp.sinh(x)
 
 hl = HamLorenz(N, phi=phi)
 
-x0 = hl.generate_initial_conditions(N, energy=energy, casimirs=casimirs)
+x0 = hl.generate_initial_conditions(energy=energy, casimirs=casimirs)
 
 sol = hl.integrate(tf, x0, t_eval=np.arange(tf), method='BM4', step=1e-1)
 
