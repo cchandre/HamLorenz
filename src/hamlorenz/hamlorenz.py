@@ -101,7 +101,7 @@ class HamLorenz:
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
         kfreq = 2 * np.pi * rfftfreq(self.N)
-        self.r = -2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
+        self.lamJ = -2j * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
         self.casimir_coeffs = self.determine_casimirs()
         self.ncasimirs = len(self.casimir_coeffs)  
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
@@ -223,7 +223,7 @@ class HamLorenz:
                 pass
         raise RuntimeError("Optimization failed: " + result.message)
     
-    def integrate(self, tf, x, t_eval=None, events=None, method='RK45', step=1e-2, tol=1e-8, omega=10):
+    def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=1e-2, tol=1e-8, omega=10, display=True):
         start = time.time()
         if method in IVP_METHODS:
             sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
@@ -237,8 +237,9 @@ class HamLorenz:
                 sol.y = self._invphi(sol.y)
         else:
             raise ValueError('The chosen method is not valid.')
-        print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
-        self._compute_error(sol.y, sol.y[:, 0])
+        if display:
+            print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
+            self._compute_error(sol.y, sol.y[:, 0])
         return sol
     
     def _compute_error(self, x, x0):
@@ -252,8 +253,8 @@ class HamLorenz:
     
     def _kappa(self, k, x):
         mstar, indk = self._mstar[k], self._indk[k]==0
-        pshift = (self._n + mstar) % (len(x))
-        nshift = (self._n + mstar - self.K - 1) % (len(x))
+        pshift = (self._n + mstar) % self.N
+        nshift = (self._n + mstar - self.K - 1) % self.N
         kappa = np.zeros_like(x)
         kappa[indk] = self.xi[mstar[indk] - 1] * x[pshift[indk]] * self.f(x[pshift[indk]])\
               - self.xi[-mstar[indk] + 1] * x[nshift[indk]] * self.f(x[nshift[indk]])
@@ -285,7 +286,7 @@ class HamLorenz:
     def coupling(self, h, y, omega=10):
         y1, y2 = np.split(y, 2)
         sy = (y1 + y2) / 2
-        dy = irfft(np.exp(-2j * omega * h * self.r) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
+        dy = irfft(np.exp(-2 * omega * h * self.lamJ) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
     def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
