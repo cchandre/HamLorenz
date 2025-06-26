@@ -7,7 +7,7 @@ where = ["src"]
 
 [project]
 name = "HamLorenz"
-version = "0.1.6"
+version = "0.1.7"
 license = {text = "BSD-2-Clause"}
 keywords = ["Lorenz models", "Hamiltonian", "symplectic integrators"]
 authors = [
@@ -33,6 +33,7 @@ classifiers = [
 dependencies = [
 	"numpy",
   "sympy",
+  "pyhamsys>=0.65",
 	"scipy",
   "pathos",
   "matplotlib"

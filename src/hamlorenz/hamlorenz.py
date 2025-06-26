@@ -101,7 +101,7 @@ class HamLorenz:
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
         kfreq = 2 * np.pi * rfftfreq(self.N)
-        self.R = 2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
+        self.r = -2 * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
         self.casimir_coeffs = self.determine_casimirs()
         self.ncasimirs = len(self.casimir_coeffs)  
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
@@ -285,7 +285,7 @@ class HamLorenz:
     def coupling(self, h, y, omega=10):
         y1, y2 = np.split(y, 2)
         sy = (y1 + y2) / 2
-        dy = irfft(np.exp(2j * omega * h * self.R) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
+        dy = irfft(np.exp(-2j * omega * h * self.r) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
     def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
