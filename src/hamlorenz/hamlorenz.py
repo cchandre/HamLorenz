@@ -65,7 +65,7 @@ class HamLorenz:
         self.N, self.K = N, K
         self.xi = np.asarray(xi)
         if isinstance(xi, (int, float)):
-            self.xi = np.full(K, xi)
+            self.xi = np.full(K, xi, dtype=float)
         elif len(self.xi) >= K:
             self.xi = self.xi[:K]
             warnings.warn('The length of xi should be K. Using the first K values of xi.', UserWarning)
@@ -131,18 +131,18 @@ class HamLorenz:
             print("No inverse found.")
             return None
 
-    def determine_casimirs(self):
+    def determine_casimirs(self, tol=1e-8):
         delta = lambda i, j: sp.KroneckerDelta(i % self.N, j % self.N)
         xi_sp = [sp.Rational(x) for x in self.xi]
         Jsp = sp.Matrix(self.N, self.N,
             lambda n, m: sum(xi_sp[k - 1] * (delta(n, m - k) - delta(n, m + k))
                                                 for k in range(1, self.K + 1)))
         Jsp_null = Jsp.nullspace()
-        casimirs = [np.array(c.evalf(), dtype=np.float64).reshape(self.N) for c in Jsp_null]
+        casimirs = [np.array(vec.evalf(), dtype=np.float64).reshape(self.N) for vec in Jsp_null]
         Jnp = np.array(Jsp.evalf(), dtype=np.float64)
         output = []
         for c in casimirs:
-            if np.allclose(Jnp @ c, 0, atol=1e-8): 
+            if np.allclose(Jnp @ c, 0, atol=tol): 
                 output.append(c)
         return output
 
