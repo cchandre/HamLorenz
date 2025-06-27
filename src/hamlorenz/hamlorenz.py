@@ -197,31 +197,40 @@ class HamLorenz:
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         return diag + off_diag
     
-    def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5):
-        for _ in range(ntry):
-            try: 
-                rng = np.random.default_rng()
-                X = rng.standard_normal(self.N)
-                X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
-                casimirs = np.atleast_1d(casimirs)
-                if len(casimirs) >= self.ncasimirs:
-                    casimirs = casimirs[:self.ncasimirs] 
-                elif len(casimirs) < self.ncasimirs:
-                    casimirs = np.full(self.ncasimirs, casimirs[0])
-                cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
-                for k in range(self.ncasimirs):
-                    cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
-                if xmin is not None and xmax is not None:
-                    xmin = np.full(self.N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
-                    xmax = np.full(self.N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
-                    bounds = list(zip(xmin, xmax))
+    def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5, ntraj=1):
+        if ntraj > 1:
+            for i in range(ntraj):
+                x0 = self._generate_initial_condition(energy, casimirs, xmin, xmax, ntry)
+                if i == 0:
+                    x0s = x0
                 else:
-                    bounds = None
-                result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP', bounds=bounds)
-                return result.x
-            except RuntimeError:
-                pass
-        raise RuntimeError("Optimization failed: " + result.message)
+                    x0s = np.vstack((x0s, x0))
+            return x0s
+        else:
+            for _ in range(ntry):
+                try: 
+                    rng = np.random.default_rng()
+                    X = rng.standard_normal(self.N)
+                    X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
+                    casimirs = np.atleast_1d(casimirs)
+                    if len(casimirs) >= self.ncasimirs:
+                        casimirs = casimirs[:self.ncasimirs] 
+                    elif len(casimirs) < self.ncasimirs:
+                        casimirs = np.full(self.ncasimirs, casimirs[0])
+                    cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
+                    for k in range(self.ncasimirs):
+                        cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
+                    if xmin is not None and xmax is not None:
+                        xmin = np.full(self.N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
+                        xmax = np.full(self.N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
+                        bounds = list(zip(xmin, xmax))
+                    else:
+                        bounds = None
+                    result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP', bounds=bounds)
+                    return result.x
+                except RuntimeError:
+                    pass
+            raise RuntimeError("Optimization failed: " + result.message)
     
     def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=1e-2, tol=1e-8, omega=10, display=True):
         start = time.time()
@@ -290,6 +299,7 @@ class HamLorenz:
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
     def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
+        x = np.atleast_2d(x)
         event_func = lambda _, y: ps(y)
         event_func.terminal, event_func.direction = False, dir
         args = [(self, tf, x_, None, event_func, method, step, tol) for x_ in x]
