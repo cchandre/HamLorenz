@@ -200,7 +200,7 @@ class HamLorenz:
     def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5, ntraj=1):
         if ntraj > 1:
             for i in range(ntraj):
-                x0 = self._generate_initial_condition(energy, casimirs, xmin, xmax, ntry)
+                x0 = self.generate_initial_conditions(energy, casimirs, xmin, xmax, ntry)
                 if i == 0:
                     x0s = x0
                 else:
