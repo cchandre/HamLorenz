@@ -185,10 +185,10 @@ class HamLorenz:
     
     def z_dot(self, _, z):
         x, Q = z[:self.N], z[self.N:].reshape((self.N, self.N))
-        dxdt, dQdt = self.x_dot(_, x), self.jacobian(x) @ Q
+        dxdt, dQdt = self.x_dot(_, x), self.jacobian(_, x) @ Q
         return np.concatenate((dxdt, dQdt), axis=None)
     
-    def jacobian(self, x):
+    def jacobian(self, _, x):
         fx, dfx = self.f(x), self.df(x)
         pshift, nshift = self._shifts(x * fx)
         diag = np.diag(dfx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0))
@@ -232,10 +232,15 @@ class HamLorenz:
                     pass
             raise RuntimeError("Optimization failed: " + result.message)
     
-    def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=1e-2, tol=1e-8, omega=10, display=True):
+    def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=None, tol=1e-8, omega=10, display=True):
+        if step is None:
+            step = tf / 100
         start = time.time()
         if method in IVP_METHODS:
-            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, rtol=tol, atol=tol, max_step=step, method=method)
+            solver_kwargs = dict(method=method, max_step=step, rtol=tol, atol=tol)
+            if method in ['Radau', 'BDF', 'LSODA']:
+                solver_kwargs['jac'] = self.jacobian
+            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, **solver_kwargs)
         elif method in METHODS:
             if len(x) % (self.K + 1) == 0:
                 sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
@@ -298,7 +303,7 @@ class HamLorenz:
         dy = irfft(np.exp(-2 * omega * h * self.lamJ) * rfft((y1 - y2) / 2, n=len(y1)), n=len(y1)).real
         return np.concatenate((sy + dy, sy - dy), axis=None)
     
-    def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-8, step=1e-2):
+    def compute_ps(self, x, tf, ps, dir=1, method='RK45', tol=1e-6, step=None):
         x = np.atleast_2d(x)
         event_func = lambda _, y: ps(y)
         event_func.terminal, event_func.direction = False, dir
