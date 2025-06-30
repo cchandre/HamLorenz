@@ -31,12 +31,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy"
 ]
 dependencies = [
-	"numpy",
-  "sympy",
+	"numpy>=1.24.3",
+  "sympy>=1.11.1",
   "pyhamsys>=0.65",
-	"scipy",
-  "pathos",
-  "matplotlib"
+	"scipy>=1.11.3",
+  "pathos>=0.3.4",
+  "matplotlib>=3.7.2"
 ]
 
 [project.urls]
