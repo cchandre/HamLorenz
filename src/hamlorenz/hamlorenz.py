@@ -302,7 +302,7 @@ class HamLorenz:
         x = np.atleast_2d(x)
         event_func = lambda _, y: ps(y)
         event_func.terminal, event_func.direction = False, dir
-        args = [(self, tf, x_, None, event_func, method, step, tol) for x_ in x]
+        args = [(self, tf, x_, [0, tf/2, tf], event_func, method, step, tol) for x_ in x]
         with Pool() as pool:
             result = pool.map(integrate_wrapper, args)
         return result
