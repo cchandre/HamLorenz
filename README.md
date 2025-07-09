@@ -13,7 +13,7 @@ Installation within a Python virtual environment:
 ```
 python3 -m pip install hamlorenz
 ```
-For more information on creating a Python virtual environment, click [here](https://realpython.com/python-virtual-environments-a-primer/).
+For more information on creating a Python virtual environment, click [here](https://realpython.com/python-virtual-environments-a-primer/). For a summary on Python virtual environment, click [here](https://github.com/cchandre/HamLorenz/wiki/Python-Virtual-Environment-Primer).
 
 ### Features
 
