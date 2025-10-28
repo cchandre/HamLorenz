@@ -6,6 +6,7 @@ This package implements **Hamiltonian Lorenz-like models**, a class of low-order
 ![License](https://img.shields.io/badge/license-BSD-lightgray)  
 
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/HamLorenz.svg?label=PyPI%20downloads)
+[![SWH](https://archive.softwareheritage.org/badge/swh:1:dir:2e47f563b4867d1cfd866173a9c0d66266e37bca/)](https://archive.softwareheritage.org/swh:1:dir:2e47f563b4867d1cfd866173a9c0d66266e37bca;origin=https://pypi.org/project/HamLorenz/;visit=swh:1:snp:98a3ade4f85c1d188c1b82ed281be6b6c325e612;anchor=swh:1:rel:595ee664e187f4b9482a7d8d6060c19366fea088;path=/hamlorenz-0.1.11/)
 
 
 ## Installation 
