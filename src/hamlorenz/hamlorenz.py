@@ -245,8 +245,7 @@ class HamLorenz:
             if len(x) % (self.K + 1) == 0:
                 sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
             else:
-                hs = HamSys(btype='other')
-                hs.coupling, hs.y_dot = self.coupling, self.y_dot
+                hs = HamSys(ndof=self.N, btype='other', coupling=self.coupling, y_dot=self.y_dot)
                 sol = solve_ivp_sympext(hs, (0, tf), self.phi(x), t_eval=t_eval, method=method, step=step, omega=omega)
                 sol.y = self._invphi(sol.y)
         else:
