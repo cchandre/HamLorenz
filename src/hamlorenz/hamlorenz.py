@@ -39,14 +39,14 @@ from scipy.io import savemat
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.mplot3d import Axes3D
-from pyhamsys import METHODS, HamSys, solve_ivp_symp, solve_ivp_sympext
+from pyhamsys import HamSys, Parameters, METHODS
 import warnings
 import time
 from datetime import date
 
 def integrate_wrapper(args):
     obj, *rest = args
-    sol = obj.integrate(*rest)
+    sol = obj.integrate(*rest, display=False)
     return sol.y_events[0]
 
 def ask_for_value(prompt="Select a branch: ", valid_values=None):
@@ -60,18 +60,20 @@ def ask_for_value(prompt="Select a branch: ", valid_values=None):
         except ValueError:
             print("Invalid input. Please enter an integer.")
 
-class HamLorenz:
-    def __init__(self, N, K=1, xi=1, f=None, phi=['cubic', 1]): 
+class HamLorenz(HamSys):
+    def __init__(self, N, K=1, xi=1, f=None, phi=['cubic', 1], dissipation=None, forcing=None):
+        super().__init__(ndof=N, btype='other')
         self.N, self.K = N, K
-        self.xi = np.asarray(xi)
-        if isinstance(xi, (int, float)):
+        if np.isscalar(xi):
             self.xi = np.full(K, xi, dtype=float)
-        elif len(self.xi) >= K:
-            self.xi = self.xi[:K]
-            warnings.warn('The length of xi should be K. Using the first K values of xi.', UserWarning)
         else:
-            self.xi = np.full(K, self.xi[0])
-            warnings.warn('The length of xi should be K. Using the first value of xi for all K.', UserWarning)
+            self.xi = np.asarray(xi, dtype=float)
+            if len(self.xi) > K:
+                self.xi = self.xi[:K]
+                warnings.warn('The length of xi should be K. Using the first K values of xi.', UserWarning)
+            elif len(self.xi) < K:
+                self.xi = np.full(K, self.xi[0], dtype=float)
+                warnings.warn('The length of xi should be K. Using the first value of xi for all K.', UserWarning)
         x, y = sp.Symbol('x', real=True), sp.Symbol('y', real=True)
         if f is None and isinstance(phi, list) and phi[0] == 'cubic':
             phi_expr, f_expr, invphi_expr = self.cubic_model(b=phi[1])
@@ -89,7 +91,7 @@ class HamLorenz:
             raise ValueError("The function f and/or phi must be SymPy expressions or phi should be ['cubic', float] cubic.")
         self.phi_matlab = '@(x)' + sp.printing.octave.octave_code(phi_expr)
         df_expr, dphi_expr = sp.diff(f_expr, x), sp.diff(phi_expr, x)
-        compatibility_check = sp.simplify(f_expr * sp.diff(phi_expr, x) - 1)
+        compatibility_check = sp.simplify(f_expr * dphi_expr - 1)
         if compatibility_check != 0:
             raise ValueError('The functions f and phi are not compatible.')
         self.f = sp.lambdify(x, f_expr, modules='numpy')
@@ -97,21 +99,48 @@ class HamLorenz:
         self.invphi = sp.lambdify(y, invphi_expr, modules='numpy') if invphi_expr is not None else None
         self.dphi = sp.lambdify(x, dphi_expr, modules='numpy')
         self.df = sp.lambdify(x, df_expr, modules='numpy')
-        self._n = np.arange(N)
+        self._n = np.arange(self.N)
         self._mstar = [(k - self._n) % (self.K + 1) for k in range(self.K + 1)]
         self._indk = [(self._n % (self.K + 1)) == k for k in range(self.K + 1)]
+        self._active = []
+        self._pshift_k = []
+        self._nshift_k = []
+        self._xi_p = []
+        self._xi_n = []
+        for k in range(self.K + 1):
+            mstar = self._mstar[k]
+            active = ~self._indk[k]
+            self._active.append(active)
+            self._pshift_k.append((self._n[active] + mstar[active]) % self.N)
+            self._nshift_k.append((self._n[active] + mstar[active] - self.K - 1) % self.N)
+            self._xi_p.append(self.xi[mstar[active] - 1])
+            self._xi_n.append(self.xi[self.K - mstar[active]])
+        k_vec = np.arange(1, self.K + 1)[:, None]
+        self._pshift_all = (self._n[None, :] + k_vec) % self.N
+        self._nshift_all = (self._n[None, :] - k_vec) % self.N
         kfreq = 2 * np.pi * rfftfreq(self.N)
         self.lamJ = -2j * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
         self.casimir_coeffs = self.determine_casimirs()
-        self.ncasimirs = len(self.casimir_coeffs)  
+        self.ncasimirs = len(self.casimir_coeffs)
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
+        self.dissipation, self.forcing = dissipation, forcing
+        self.J = self.K // 2
+        self.w = np.ones(2 * self.J + 1)
+        self.w[[0, -1]] = 0.5 + 0.5 * (self.K % 2)
+        self._w_over_K = self.w / self.K
+        j = np.arange(-self.J, self.J + 1)[:, None]
+        self._l2005_minus = (self._n[None, :] - j) % self.N
+        self._l2005_plus = (self._n[None, :] + j) % self.N
 
     def cubic_model(self, b=1):
         x, y = sp.Symbol('x', real=True), sp.Symbol('y', real=True)
+        if b == 0:
+            return x, 1+ 0 * x, y
         phi = x + b * x**3 / 3
         f = 1 / (1 + b * x**2)
-        u = 3 * y / (2 * b) + sp.sqrt(1 / b**3 + (3 * y / (2 * b))**2)
-        invphi = u**(1/3) - u**(-1/3) / b
+        a = 3 * sp.Abs(y) / (2 * b)
+        u = (a + sp.sqrt(1 / b**3 + a**2))**sp.Rational(1, 3)
+        invphi = sp.sign(y) * (u - 1 / (b * u))
         return phi, f, invphi
     
     def determine_invphi(self, phi):
@@ -146,107 +175,145 @@ class HamLorenz:
                 output.append(c)
         return output
 
-    def _invphi(self, x, x0=None):
+    def _invphi(self, x, x0=None, tol=1e-12, maxiter=20):
         if self.invphi is not None:
             return self.invphi(x)
-        x = np.asarray(x)
-        is_scalar = x.ndim == 0
-        if np.isscalar(x0):
-            x0s = np.full_like(x, x0, dtype=float)
-        else:
-            x0s = np.asarray(x0)
-            if x0s.shape != x.shape:
-                raise ValueError("x0 must be scalar or have the same shape as x")
-        def solve_scalar(xi, x0i):
-            g = lambda z: self.phi(z) - xi
-            return root_scalar(g, x0=x0i, fprime=lambda z: self.dphi(z), method='newton').root
-        if is_scalar:
-            return solve_scalar(x.item(), x0s.item())
-        roots = np.fromiter((solve_scalar(xi, x0i) for xi, x0i in zip(x.flat, x0s.flat)), dtype=float)
-        return roots.reshape(x.shape)
+        z = np.array(x if x0 is None else np.broadcast_to(x0, np.shape(x)), dtype=float, copy=True)
+        for _ in range(maxiter):
+            dz = (self.phi(z) - x) / self.dphi(z)
+            z -= dz
+            if np.all(np.abs(dz) <= tol * (1.0 + np.abs(z))):
+                break
+        return z
     
     def _shifts(self, vec, axis=None):
+        if axis is None and vec.ndim == 1:
+            return vec[self._pshift_all], vec[self._nshift_all]
         pshift = np.asarray([np.roll(vec, -k, axis=axis) for k in range(1, self.K + 1)])
         nshift = np.asarray([np.roll(vec, k, axis=axis) for k in range(1, self.K + 1)])
         return pshift, nshift
     
     def l96_dot(self, _, x):
-        return np.sum(self.xi[:, np.newaxis] * (np.roll(x, -1) - np.roll(x, 1)), axis=0)
-    
-    def x_dot(self, _, x):
+        dxdt = np.sum(self.xi[:, np.newaxis] * (np.roll(x, -1) - np.roll(x, 2)) * np.roll(x, 1), axis=0)
+        if self.dissipation is not None:
+            dxdt -= self.dissipation * x
+        if self.forcing is not None:
+            dxdt += self.forcing
+        return dxdt
+
+    def lorenz_bracket(self, X, Y):
+        wx = self._w_over_K @ X[self._l2005_minus]
+        wy = self._w_over_K @ Y[self._l2005_minus] if Y is not X else wx
+        term1 = -np.roll(wx, 2 * self.K) * np.roll(wy, self.K)
+        prod = np.roll(wx, self.K) * np.roll(Y, -self.K)
+        term2 = self._w_over_K @ prod[self._l2005_plus]
+        return term1 + term2
+
+    def l2005_dot(self, _, x):
+        dxdt = self.lorenz_bracket(x, x)
+        if self.dissipation is not None:
+            dxdt -= self.dissipation * x
+        if self.forcing is not None:
+            dxdt += self.forcing
+        return dxdt
+
+    def varx_dot(self, _, x):
         fx = self.f(x)
         pshift, nshift = self._shifts(x * fx)
-        return fx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+        dxdt = fx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+        if self.dissipation is not None:
+            dxdt -= self.dissipation * x
+        if self.forcing is not None:
+            dxdt += self.forcing
+        return dxdt
     
-    def y_dot(self, _, y):
+    def vary_dot(self, _, y):
         x = self._invphi(y)
-        pshift, nshift = self._shifts(x * self.f(x))
-        return np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
-    
+        fx = self.f(x)
+        pshift, nshift = self._shifts(x * fx)
+        dxdt = np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0)
+        if self.dissipation is not None:
+            dxdt -= self.dissipation * x / fx
+        if self.forcing is not None:
+            dxdt += self.forcing / fx
+        return dxdt
+
     def z_dot(self, _, z):
         x, Q = z[:self.N], z[self.N:].reshape((self.N, self.N))
-        dxdt, dQdt = self.x_dot(_, x), self.jacobian(_, x) @ Q
+        dxdt, dQdt = self.varx_dot(_, x), self.jacobian(_, x) @ Q
         return np.concatenate((dxdt, dQdt), axis=None)
     
     def jacobian(self, _, x):
-        fx, dfx = self.f(x), self.df(x)
+        fx = np.broadcast_to(self.f(x), x.shape)
+        dfx = np.broadcast_to(self.df(x), x.shape)
         pshift, nshift = self._shifts(x * fx)
         diag = np.diag(dfx * np.sum(self.xi[:, np.newaxis] * (pshift - nshift), axis=0))
         pshift, nshift = self._shifts(fx + x * dfx)
         off_diag = np.sum(fx[np.newaxis, :, np.newaxis] * self.xi[:, np.newaxis, np.newaxis]\
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
+        if self.dissipation is not None:
+            diag -= self.dissipation * np.eye(self.N)
         return diag + off_diag
     
     def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5, ntraj=1):
         if ntraj > 1:
-            for i in range(ntraj):
-                x0 = self.generate_initial_conditions(energy, casimirs, xmin, xmax, ntry)
-                if i == 0:
-                    x0s = x0
-                else:
-                    x0s = np.vstack((x0s, x0))
-            return x0s
+            return np.vstack([self.generate_initial_conditions(energy, casimirs, xmin, xmax, ntry) for _ in range(ntraj)])
+        rng = np.random.default_rng()
+        casimirs = np.atleast_1d(casimirs)
+        if len(casimirs) >= self.ncasimirs:
+            casimirs = casimirs[:self.ncasimirs]
         else:
-            for _ in range(ntry):
-                try: 
-                    rng = np.random.default_rng()
-                    X = rng.standard_normal(self.N)
-                    X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
-                    casimirs = np.atleast_1d(casimirs)
-                    if len(casimirs) >= self.ncasimirs:
-                        casimirs = casimirs[:self.ncasimirs] 
-                    elif len(casimirs) < self.ncasimirs:
-                        casimirs = np.full(self.ncasimirs, casimirs[0])
-                    cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
-                    for k in range(self.ncasimirs):
-                        cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
-                    if xmin is not None and xmax is not None:
-                        xmin = np.full(self.N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
-                        xmax = np.full(self.N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
-                        bounds = list(zip(xmin, xmax))
-                    else:
-                        bounds = None
-                    result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP', bounds=bounds)
-                    return result.x
-                except RuntimeError:
-                    pass
-            raise RuntimeError("Optimization failed: " + result.message)
+            casimirs = np.full(self.ncasimirs, casimirs[0])
+        cons = [{'type': 'eq', 'fun': lambda x: self.hamiltonian(x) - energy}]
+        for k in range(self.ncasimirs):
+            cons.append({'type': 'eq', 'fun': lambda x, k=k: self.casimir(x, k) - casimirs[k]})
+        if xmin is not None and xmax is not None:
+            xmin = np.full(self.N, xmin) if np.isscalar(xmin) else np.asarray(xmin)
+            xmax = np.full(self.N, xmax) if np.isscalar(xmax) else np.asarray(xmax)
+            bounds = list(zip(xmin, xmax))
+        else:
+            bounds = None
+        for _ in range(ntry):
+            X = rng.standard_normal(self.N)
+            X = np.sqrt(2 * energy) * X / np.linalg.norm(X)
+            result = minimize(lambda _: 0, X, constraints=cons, method='SLSQP', bounds=bounds)
+            if result.success:
+                return result.x
+        raise RuntimeError("Optimization failed: " + result.message)
     
-    def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=None, tol=1e-8, omega=10, display=True):
+    def integrate(self, tf, x, t_eval=None, events=None, method='BM4', step=None, tol=1e-8, projection='midpoint', coords='x', display=True):
         if step is None:
             step = tf / 100
+        if t_eval is None:
+            t_eval = np.linspace(0, tf, int(np.round(tf / step)) + 1)
         start = time.time()
+        is_y_coords = (coords.lower() == 'y')
+        y0 = self.phi(x) if is_y_coords else x
+        rhs_func = self.vary_dot if is_y_coords else self.varx_dot
         if method in IVP_METHODS:
             solver_kwargs = dict(method=method, max_step=step, rtol=tol, atol=tol)
-            if method in ['Radau', 'BDF', 'LSODA']:
+            if method in ['Radau', 'BDF', 'LSODA'] and not is_y_coords:
                 solver_kwargs['jac'] = self.jacobian
-            sol = solve_ivp(self.x_dot, (0, tf), x, t_eval=t_eval, events=events, **solver_kwargs)
+            if events is not None:
+                solver_kwargs['events'] = events
+            sol = solve_ivp(rhs_func, (0, tf), y0, t_eval=t_eval, **solver_kwargs)
+            if is_y_coords:
+                sol.y = self._invphi(sol.y)
         elif method in METHODS:
-            if len(x) % (self.K + 1) == 0:
-                sol = solve_ivp_symp(self._chi, self._chi_star, (0, tf), x, t_eval=t_eval, method=method, step=step)
-            else:
-                hs = HamSys(ndof=self.N, btype='other', coupling=self.coupling, y_dot=self.y_dot)
-                sol = solve_ivp_sympext(hs, (0, tf), self.phi(x), t_eval=t_eval, method=method, step=step, omega=omega)
+            use_ext = (len(y0) % (self.K + 1) != 0)
+            self.y_dot = self.vary_dot if is_y_coords else self.varx_dot
+            params = Parameters(
+                step=step,
+                solver=method,
+                extension=use_ext,
+                tol=tol,
+                projection=projection,
+                display=False,
+                check_energy=False
+            )
+            initial_state = y0 if is_y_coords else (self.phi(x) if use_ext else x)
+            sol = super().integrate(initial_state, t_eval, params=params)
+            if use_ext or is_y_coords:
                 sol.y = self._invphi(sol.y)
         else:
             raise ValueError('The chosen method is not valid.')
@@ -256,42 +323,51 @@ class HamLorenz:
         return sol
     
     def _compute_error(self, x, x0):
+        if self.dissipation is not None or self.forcing is not None:
+            return
         energy_init = self.hamiltonian(x0)
         energy_error = np.amax(np.abs(self.hamiltonian(x[:self.N, :]) - energy_init), axis=0)
         print(f'\033[90m        Error in energy = {energy_error:.2e} (initial value = {energy_init:.2e}) \033[00m')
         casimirs_init = [self.casimir(x0, k=k) for k in range(self.ncasimirs)]
-        casimirs_error = [np.amax(np.abs(self.casimir(x[:self.N, :], k=k)  - casimirs_init[k]), axis=0) for k in range(self.ncasimirs)]
-        for _, (cas, err) in enumerate(zip(casimirs_init, casimirs_error)):
-            print(f'\033[90m        Error in Casimir invariant {_} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
+        casimirs_error = [np.amax(np.abs(self.casimir(x[:self.N, :], k=k) - casimirs_init[k]), axis=0) for k in range(self.ncasimirs)]
+        for k, (cas, err) in enumerate(zip(casimirs_init, casimirs_error)):
+            print(f'\033[90m        Error in Casimir invariant {k} = {err:.2e} (initial value = {cas:.2e}) \033[00m')
     
     def _kappa(self, k, x):
-        mstar, indk = self._mstar[k], self._indk[k]==0
-        pshift = (self._n + mstar) % self.N
-        nshift = (self._n + mstar - self.K - 1) % self.N
-        kappa = np.zeros_like(x)
-        kappa[indk] = self.xi[mstar[indk] - 1] * x[pshift[indk]] * self.f(x[pshift[indk]])\
-              - self.xi[-mstar[indk] + 1] * x[nshift[indk]] * self.f(x[nshift[indk]])
-        return kappa
+        frozen = self._indk[k]
+        xf_frozen = np.empty_like(x)
+        xf_frozen[frozen] = x[frozen] * self.f(x[frozen])
+        return self._xi_p[k] * xf_frozen[self._pshift_k[k]] - self._xi_n[k] * xf_frozen[self._nshift_k[k]]
     
     def casimir(self, x, k=0):
-        coeffs = self.casimir_coeffs[k] if x.ndim==1 else self.casimir_coeffs[k][:, np.newaxis]
-        return np.sum(self.phi(coeffs * x), axis=0 if x.ndim == 2 else None)
+        return self.casimir_coeffs[k] @ self.phi(x)
     
     def hamiltonian(self, x):
         return np.sum(x**2, axis=0) / 2
     
     def _mapk(self, k, x, h):
-        indk = self._indk[k]==0
-        kappa = self._kappa(k, x)
-        x[indk] = self._invphi(kappa[indk] * h + self.phi(x[indk]), x0=self.phi(x[indk]))
+        active = self._active[k]
+        x_act = x[active]
+        kappa_act = self._kappa(k, x)
+        x[active] = self._invphi(kappa_act * h + self.phi(x_act), x0=x_act)
         return x
     
-    def _chi(self, h, _, x):
+    def chi(self, h, _, x):
+        x = x.copy()
         for k in range(self.K + 1):
             x = self._mapk(k, x, h)
+        if self.dissipation is not None:
+            x *= np.exp(-self.dissipation * h)
+        if self.forcing is not None:
+            x += self.forcing * h
         return x
     
-    def _chi_star(self, h, _, x):
+    def chi_star(self, h, _, x):
+        x = x.copy()
+        if self.forcing is not None:
+            x += self.forcing * h
+        if self.dissipation is not None:
+            x *= np.exp(-self.dissipation * h)
         for k in reversed(range(self.K + 1)):
             x = self._mapk(k, x, h)
         return x
@@ -336,7 +412,8 @@ class HamLorenz:
         start = time.time()
         lyap_sum = np.zeros(self.N, dtype=np.float64)
         x, Q = x0.copy(), np.eye(self.N, dtype=np.float64)
-        for _ in range(int(tf / reortho_dt)):
+        nsteps = int(tf / reortho_dt)
+        for _ in range(nsteps):
             z0 = np.concatenate((x, Q), axis=None)
             sol = solve_ivp(self.z_dot, (0, reortho_dt), z0, method=method, t_eval=[reortho_dt], atol=tol, rtol=tol)
             z1 = sol.y[:, -1]
@@ -345,8 +422,9 @@ class HamLorenz:
             lyap_sum += np.log(np.abs(np.diag(R)))
         print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
         self._compute_error(x[:, np.newaxis], x0)
-        lyap_sort = np.sort(lyap_sum / tf)
-        print(f'\033[90m        Error in spectrum = {np.amax(np.abs(lyap_sort + lyap_sort[::-1])):.2e} \033[00m')
+        lyap_sort = np.sort(lyap_sum / (nsteps * reortho_dt))
+        if self.dissipation is None and self.forcing is None:
+            print(f'\033[90m        Error in spectrum = {np.amax(np.abs(lyap_sort + lyap_sort[::-1])):.2e} \033[00m')
         if plot:
             plt.figure(figsize=(8, 4))
             plt.plot(lyap_sort, linewidth=2)
@@ -427,10 +505,16 @@ class HamLorenz:
         mdic = {'date': date.today().strftime(' %B %d, %Y'), 'author': 'cristel.chandre@cnrs.fr'}
         mdic.update({'phi': self.phi_matlab, 'N': self.N, 'K': self.K, 'xi': self.xi.tolist()})
         mdic.update({'Casimirs': self.casimir_coeffs})
-        if isinstance(data, OdeSolution):
-            X = data.y[:self.N, :].T
-            Y = self.phi(X)
-            mdic.update({'t': data.t, 'X': X, 'Y': Y, 'Xs': self.desymmetrize(X).T, 'Ys': self.desymmetrize(Y).T})
+        if hasattr(data, 'y') and hasattr(data, 't'):
+            X_raw = data.y[:self.N, :]
+            Y_raw = self.phi(X_raw)
+            mdic.update({
+                't': data.t, 
+                'X': X_raw.T, 
+                'Y': Y_raw.T, 
+                'Xs': self.desymmetrize(X_raw).T, 
+                'Ys': self.desymmetrize(Y_raw).T
+            })
         else:
             mdic.update({'data': data})
         savemat(filename + '.mat', mdic)
