@@ -123,7 +123,8 @@ class HamLorenz(HamSys):
         self.casimir_coeffs = self.determine_casimirs()
         self.ncasimirs = len(self.casimir_coeffs)
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
-        self.dissipation, self.forcing = dissipation, forcing
+        self.dissipation = None if dissipation is None else np.abs(dissipation)
+        self.forcing = forcing
         self.J = self.K // 2
         self.w = np.ones(2 * self.J + 1)
         self.w[[0, -1]] = 0.5 + 0.5 * (self.K % 2)
