@@ -118,7 +118,8 @@ class HamLorenz(HamSys):
         self._pshift_all = (self._n[None, :] + k_vec) % self.N
         self._nshift_all = (self._n[None, :] - k_vec) % self.N
         kfreq = 2 * np.pi * rfftfreq(self.N)
-        self.lamJ = -2j * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, K + 1), kfreq)), axis=0)
+        self.lamJ = -2j * np.sum(self.xi[:, np.newaxis] * np.sin(np.outer(np.arange(1, self.K + 1), kfreq)), axis=0)
+        self.lam_lap = -4.0 * np.sin(kfreq / 2.0) ** 2
         self.casimir_coeffs = self.determine_casimirs()
         self.ncasimirs = len(self.casimir_coeffs)
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
