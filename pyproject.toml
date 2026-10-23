@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "HamLorenz"
-version = "0.1.15"
+version = "0.1.20"
 description = "Hamiltonian Lorenz-like models"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "BSD-2-Clause"}
+license = "BSD-2-Clause"
 keywords = ["Lorenz models", "Hamiltonian", "symplectic integrators"]
 authors = [
   {name="Cristel Chandre", email="cristel.chandre@cnrs.fr"},

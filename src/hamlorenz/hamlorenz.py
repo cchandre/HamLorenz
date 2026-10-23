@@ -32,7 +32,6 @@ from scipy.fft import rfft, irfft, rfftfreq, fft, ifft, fftfreq
 from scipy.optimize import root_scalar, minimize
 from scipy.stats import gaussian_kde, norm, zscore
 from scipy.integrate import solve_ivp
-from scipy.integrate._ivp.ivp import OdeSolution
 from scipy.integrate._ivp.ivp import METHODS as IVP_METHODS
 from scipy.stats import skew
 from scipy.io import savemat
@@ -61,7 +60,7 @@ def ask_for_value(prompt="Select a branch: ", valid_values=None):
             print("Invalid input. Please enter an integer.")
 
 class HamLorenz(HamSys):
-    def __init__(self, N, K=1, xi=1, f=None, phi=['cubic', 1], dissipation=None, forcing=None):
+    def __init__(self, N, K=1, xi=1, f=None, phi=['cubic', 1], dissipation=None, forcing=None, diffusion=None):
         super().__init__(ndof=N, btype='other')
         self.N, self.K = N, K
         if np.isscalar(xi):
@@ -124,7 +123,15 @@ class HamLorenz(HamSys):
         self.ncasimirs = len(self.casimir_coeffs)
         self.delta_p, self.delta_n = self._shifts(np.eye(self.N, dtype=int), axis=0)
         self.dissipation = None if dissipation is None else np.abs(dissipation)
-        self.forcing = forcing
+        self.forcing, self.diffusion = forcing, diffusion
+        if self.diffusion is not None:
+            if np.isscalar(self.diffusion):
+                self.diffusion = (float(self.diffusion), 0.0)
+            else:
+                self.diffusion = (float(self.diffusion[0]), float(self.diffusion[1]) if len(self.diffusion) > 1 else 0.0)
+            d2 = self.delta_p[0] - 2 * np.eye(self.N) + self.delta_n[0]
+            d4 = d2 @ d2
+            self.diff_mat = -self.diffusion[0] * d2 - self.diffusion[1] * d4
         self.J = self.K // 2
         self.w = np.ones(2 * self.J + 1)
         self.w[[0, -1]] = 0.5 + 0.5 * (self.K % 2)
@@ -218,6 +225,19 @@ class HamLorenz(HamSys):
             dxdt += self.forcing
         return dxdt
 
+    def laplacian(self, x, dx=1.0):
+        if x.ndim == 1:
+            return (x[self._pshift_all[0]] - 2.0 * x + x[self._nshift_all[0]]) / (dx ** 2)
+        return (np.roll(x, -1, axis=0) - 2.0 * x + np.roll(x, 1, axis=0)) / (dx ** 2)
+
+    def biharmonic(self, x, dx=1.0):
+        return self.laplacian(self.laplacian(x, dx=dx), dx=dx)
+
+    def _diff_term(self, x):
+        d1 = self.laplacian(x)
+        d2 = self.biharmonic(x)
+        return -self.diffusion[0] * d1 - self.diffusion[1] * d2
+
     def varx_dot(self, _, x):
         fx = self.f(x)
         pshift, nshift = self._shifts(x * fx)
@@ -226,6 +246,8 @@ class HamLorenz(HamSys):
             dxdt -= self.dissipation * x
         if self.forcing is not None:
             dxdt += self.forcing
+        if self.diffusion is not None:
+            dxdt += self._diff_term(x)
         return dxdt
     
     def vary_dot(self, _, y):
@@ -237,6 +259,8 @@ class HamLorenz(HamSys):
             dxdt -= self.dissipation * x / fx
         if self.forcing is not None:
             dxdt += self.forcing / fx
+        if self.diffusion is not None:
+            dxdt += self._diff_term(x) / fx
         return dxdt
 
     def z_dot(self, _, z):
@@ -254,6 +278,8 @@ class HamLorenz(HamSys):
               * (pshift[..., np.newaxis] * self.delta_p - nshift[..., np.newaxis] * self.delta_n), axis=0)
         if self.dissipation is not None:
             diag -= self.dissipation * np.eye(self.N)
+        if self.diffusion is not None:
+            off_diag += self.diff_mat
         return diag + off_diag
     
     def generate_initial_conditions(self, energy=1, casimirs=0, xmin=None, xmax=None, ntry=5, ntraj=1):
@@ -324,7 +350,7 @@ class HamLorenz(HamSys):
         return sol
     
     def _compute_error(self, x, x0):
-        if self.dissipation is not None or self.forcing is not None:
+        if self.dissipation is not None or self.forcing is not None or self.diffusion is not None:
             return
         energy_init = self.hamiltonian(x0)
         energy_error = np.amax(np.abs(self.hamiltonian(x[:self.N, :]) - energy_init), axis=0)
@@ -357,6 +383,10 @@ class HamLorenz(HamSys):
         x = x.copy()
         for k in range(self.K + 1):
             x = self._mapk(k, x, h)
+        if self.diffusion is not None:
+            lam = self.lam_lap
+            rate = -self.diffusion[0] * lam - self.diffusion[1] * (lam ** 2)
+            x = irfft(np.exp(rate * h) * rfft(x, n=self.N), n=self.N).real
         if self.dissipation is not None:
             x *= np.exp(-self.dissipation * h)
         if self.forcing is not None:
@@ -367,6 +397,10 @@ class HamLorenz(HamSys):
         x = x.copy()
         if self.forcing is not None:
             x += self.forcing * h
+        if self.diffusion is not None:
+            lam = self.lam_lap
+            rate = -self.diffusion[0] * lam - self.diffusion[1] * (lam ** 2)
+            x = irfft(np.exp(rate * h) * rfft(x, n=self.N), n=self.N).real
         if self.dissipation is not None:
             x *= np.exp(-self.dissipation * h)
         for k in reversed(range(self.K + 1)):
@@ -424,7 +458,7 @@ class HamLorenz(HamSys):
         print(f'\033[90m        Computation finished in {int(time.time() - start)} seconds \033[00m')
         self._compute_error(x[:, np.newaxis], x0)
         lyap_sort = np.sort(lyap_sum / (nsteps * reortho_dt))
-        if self.dissipation is None and self.forcing is None:
+        if self.dissipation is None and self.forcing is None and self.diffusion is None:
             print(f'\033[90m        Error in spectrum = {np.amax(np.abs(lyap_sort + lyap_sort[::-1])):.2e} \033[00m')
         if plot:
             plt.figure(figsize=(8, 4))
